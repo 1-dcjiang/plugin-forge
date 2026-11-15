@@ -665,6 +665,20 @@ def _pid_is_sandbox_server(pid):
     return "user_plugin_server.py" in cmd
 
 
+def should_kill(verdict, force):
+    """该不该对这个 pid 下手。
+
+    True  = 命令行里真看见 user_plugin_server.py，杀。
+    False = pid 已被别人复用，不杀。
+    None  = 读不到命令行（PowerShell 缺失、被挡、超时，或 pid 已消失）。旧版走 else
+            分支照样 taskkill，等于「验不出身份就开枪」，正是这个保护要防的重启后复用场景。
+            现在只有明确 --force 才杀。
+    """
+    if verdict is True:
+        return True
+    return bool(force) and verdict is None
+
+
 def cmd_stop(args):
     root = Path(args.root).expanduser().resolve()
     st = load_state(root)
@@ -672,12 +686,16 @@ def cmd_stop(args):
     if not pid:
         die("状态文件里没有 pid")
     verdict = _pid_is_sandbox_server(pid)
-    if verdict is False:
+    if not should_kill(verdict, getattr(args, "force", False)):
+        if verdict is None:
+            die("读不到 pid=%s 的命令行（PowerShell 缺失、被挡、超时，或该 pid 已不存在），"
+                "拒绝杀进程：重启后 pid 会被复用，开枪会动到宿主的进程。"
+                "先核对端口归属，确认是沙箱服务再带 --force 重跑。" % pid)
         log(f"pid={pid} 的命令行里没有 user_plugin_server.py，判定为 pid 复用，"
             "不杀该进程；只清沙箱状态文件。若沙箱服务仍在，请手工核对端口后处理")
     else:
         if verdict is None:
-            log("读不到 pid 的命令行（权限或平台限制），按旧行为继续停止")
+            log("读不到 pid 的命令行，按 --force 的明确要求停止")
         if os.name == "nt":
             subprocess.call(["taskkill", "/PID", str(pid), "/T", "/F"],
                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -823,7 +841,15 @@ def _self_test():
     for good_id in ("my_plugin", "GalgamePlugin", "a1"):
         if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", good_id):
             bad.append("id 校验误杀 " + good_id)
-    total = len(keep) + len(drop) + 9 + _symlink_cases(bad)
+    # 2026-11-15 补：kill 判定的六种组合。旧版 None 走 else 分支照样 taskkill。
+    kill_cases = [(True, False, True), (True, True, True),
+                  (False, False, False), (False, True, False),
+                  (None, False, False), (None, True, True)]
+    for verdict, force, want in kill_cases:
+        got = should_kill(verdict, force)
+        if got != want:
+            bad.append("kill 判定 verdict=%s force=%s 得到 %s 期望 %s" % (verdict, force, got, want))
+    total = len(keep) + len(drop) + 9 + len(kill_cases) + _symlink_cases(bad)
     print("SANDBOX SELF-TEST: %s（%d 项）" % ("PASS" if not bad else "FAIL", total))
     for m in bad:
         print("  FAIL:", m)
@@ -903,6 +929,8 @@ def main():
 
     x = sub.add_parser("stop", help="停止沙箱服务")
     x.add_argument("--root", required=True)
+    x.add_argument("--force", action="store_true",
+                   help="读不到 pid 命令行时也照杀。只在确认 pid 仍属于沙箱服务后用")
     x.set_defaults(func=cmd_stop)
 
     args = ap.parse_args()
