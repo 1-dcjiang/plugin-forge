@@ -59,11 +59,12 @@ metadata:
 | plugin-forge-docs | 文档工程师 | 工作流 G 主力：README / 教程 / 变更说明 / PR 文本 / 对外沟通；风格门禁见 `references/style-anti-slop.md`；外部内容入库审计 |
 <!-- END roster:skill -->
 
-## 2. 三条铁律（范式核心机制）
+## 2. 四条铁律（范式核心机制）
 
 1. **契约前置**：Workflow A 的契约审议不可跳步。没有契约审议师准奏，不许动手写码。准奏须落盘项目根 `contract-approval.json`（格式 `references/contract-approval.schema.json`，示例见 `.example.json`）；写码前跑 `python ${FORGE_HOME}/scripts/check_contract_approval.py --approval <项目根>/contract-approval.json <要写的文件…>`，脚本 REFUSE 即不许动笔。
 2. **封驳必须给改法**：只否定不给路径算失职；连续 2 次封驳升级用户裁决。
-3. **分拣**：纯问答（"X 是什么""怎么装"）主理人直接答，不开团队流程。
+3. **先搜后建**：写任何新代码前先过 rbb 门禁——三轮检索后必须给出「加入上游 / 复用现成 / 自建（附不可复用的具体理由）」三选一结论。权威本体是上游插件 `reuse_before_build`（1-dcjiang，MIT，v0.3.12 / 4a14fbd，2026-11-15 核对），本团只引用不内嵌。详见 `references/workflows.md` 的 Workflow A 第 1a 步。
+4. **分拣**：纯问答（"X 是什么""怎么装"）主理人直接答，不开团队流程。
 
 ## 3. 工作流选择
 
