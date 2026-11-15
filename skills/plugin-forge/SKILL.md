@@ -63,7 +63,7 @@ metadata:
 
 1. **契约前置**：Workflow A 的契约审议不可跳步。没有契约审议师准奏，不许动手写码。准奏须落盘项目根 `contract-approval.json`（格式 `references/contract-approval.schema.json`，示例见 `.example.json`）；写码前跑 `python ${FORGE_HOME}/scripts/check_contract_approval.py --approval <项目根>/contract-approval.json <要写的文件…>`，脚本 REFUSE 即不许动笔。
 2. **封驳必须给改法**：只否定不给路径算失职；连续 2 次封驳升级用户裁决。
-3. **先搜后建**：写任何新代码前先过 rbb 门禁。三轮检索后必须给判决，四档取一：加入上游（Join）/ 做官方扩展（Extend）/ 分叉并保持同步（Fork）/ 自建（Build，附**不可复用的具体理由**）。判定先过可改性硬闸：绿才 Join，黄只 Extend，红禁止 Join。小改动走 rbb 快速档：3 条检索串加三行 Reused / Change / Risk，但「有没有人做过」这一问不豁免。断网或仓库读不到时不豁免，改成交检索串清单并标「未核验」。判决为 Join / Fork 时，对外发 issue 或 PR 每次单独确认。权威本体是上游插件 `reuse_before_build`（1-dcjiang，MIT，v0.3.12 / 4a14fbd，2026-11-15 核对），本团只引用不内嵌。详见 `references/workflows.md` 的 Workflow A 第 1a 步。
+3. **先搜后建**：写任何新代码前先过 rbb 门禁。三轮检索后必须给判决，四档取一：加入上游（Join）/ 做官方扩展（Extend）/ 分叉并保持同步（Fork）/ 自建（Build，附**不可复用的具体理由**）。判定先过可改性硬闸：绿才 Join，黄只 Extend，红禁止 Join。小改动（走精简流或 Workflow B）由 lead 派 market-research 跑 rbb 快速档：3 条检索串加三行 Reused / Change / Risk，但「有没有人做过」这一问不豁免。纯改文案与文档不算写代码，不触发 1a。断网或仓库读不到时不豁免，改成交检索串清单并标「未核验」。判决为 Join / Fork 时，对外发 issue 或 PR 每次单独确认。权威本体是上游插件 `reuse_before_build`（1-dcjiang，MIT，v0.3.12 / 4a14fbd，2026-11-15 核对），本团只引用不内嵌。详见 `references/workflows.md` 的 Workflow A 第 1a 步。
 4. **分拣**：纯问答（"X 是什么""怎么装"）主理人直接答，不开团队流程。
 
 ## 3. 工作流选择
@@ -116,7 +116,7 @@ metadata:
 ## 6. 交付前终检（闸门快照）
 
 `references/delivery-self-check.md` 是**可选参考**，不是接线闸门：它的来源与许可未确立，`AUDIT.md` 明写「来源确立前不得作为交付闸门接线」。所以本节不要求执行该文件，也不复制它的条目原文。
-本团自己强制的就三条，写在这里，不依赖那份文件：任何最终交付（回复用户、PR 文本、发布、验收汇报）发送前，逐项贴「闸门快照」；每项写实核对内容，不许只写「未命中」；命中即返工，重跑全闸才交付。
-适配：本包未注册 `delivery-no-pseudoblock` 这个 skill 名，任何宿主都以「读取该文件」为加载；该闸不覆盖契约门禁与宪法第 7 条的授权提问（见文件开头声明）。
+本团自己强制的就三条，写在这里，不依赖那份文件：任何最终交付（回复用户、PR 文本、发布、验收汇报）发送前，逐项贴「闸门快照」（快照 = 下面这三条各一行实测结论）；每项写实核对内容，不许只写「未命中」；命中即返工，重跑全闸才交付。
+适配：本包未注册 `delivery-no-pseudoblock` 这个 skill 名。上面三条不依赖那个 skill 是否存在，也不依赖那份可选参考；该闸不覆盖契约门禁与宪法第 7 条的授权提问。
 「被藏的最优步」指：跳过实测、只给结论；跑不动就报「环境不支持」而不给复现命令；用计划将来时冒充已完成。主理人在工作流 A/F/G/H 的验收步末尾执行此闸。
 交付涉及 Git、PR、测试服务或对外文本时，同时遵守用户级偏好（本机 `references/user-prefs.md`，或宿主全局 AGENTS.md）。

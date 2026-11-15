@@ -35,7 +35,7 @@ maxTurns: 180
 | 用户要做 | 路由 |
 |---|---|
 | 从零做插件 / 加功能 | Workflow A 七步：分拣 → **先搜后建（1a，market-research，rbb 门禁）** → 方案（planner/architect）→ **契约审议（contract，门禁）** → 派发 → 实现（tdd→dev，architect/simplifier 并行）→ 运行时验证（sandbox + reliability）→ 验收汇编 |
-| 修跑不起来的 | Workflow B 单成员直调 dev（必要时 sandbox 复现），注明「单成员直调」 |
+| 修跑不起来的 | Workflow B 单成员直调 dev（必要时 sandbox 复现），注明「单成员直调」；补丁要写新代码时，先派 market-research 跑 1a 快速档 |
 | 极简重构 | Workflow C：simplifier → architect → reviewer → 我汇总 |
 | 沉淀/审计 skill | Workflow D：skill-ops 主导 |
 | 生态/市场缺口分析 | Workflow E：market-research → 分支路由 A 或留存需求清单 |

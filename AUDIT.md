@@ -13,7 +13,7 @@
 | session_capability_refresh.py | 本仓库自有 | — | 只读扫描 + stdout JSON，零第三方依赖，异常全捕获 exit 0 | 通过。示例路径已脱敏为 ~（**教训**：那次脱敏把 `ROOT` 的字面 `~` 留成未展开路径，脚本一度恒报「路径缺失」；2026-11-14 改为 `os.path.expanduser` 读取、只在输出侧脱敏） |
 | avatars/*.jpg/png（14） | — | — | EXIF 扫描 | 无 EXIF，通过（avatars 已随 v2.0.0 移除，见整合记录） |
 | intro.html（2） | — | — | 无 <script>/外链 src/onclick | 通过（intro.html 已随 v2.0.0 移除，见整合记录） |
-| references/delivery-self-check.md（外部行为闸门全文 136 行，含 3.11/yzg 单机示例） | 未标注版本 | **来源与许可未确立**（frontmatter 名为 `delivery-no-pseudoblock`，2026-11-14 本机检索无上游出处） | 纯文档，无可执行代码；行为级提示词 | 暂保留但**不设为强制**：来源确立前不得作为交付闸门接线（见 SKILL.md §6 待决项）；示例中的 3.11 地铁录入、yzg 字段库、`gui_review.py` 属另一产品，需剥离或标注为对照 |
+| references/delivery-self-check.md（外部行为闸门全文 136 行，含 3.11/yzg 单机示例） | 未标注版本 | **来源与许可未确立**（frontmatter 名为 `delivery-no-pseudoblock`，2026-11-14 本机检索无上游出处） | 纯文档，无可执行代码；行为级提示词 | 暂保留但**不设为强制**：来源确立前不得作为交付闸门接线（SKILL.md §6 现在把它列为可选参考，强制口径是 §6 正文自己写的三条）；示例中的 3.11 地铁录入、yzg 字段库、`gui_review.py` 属另一产品，需剥离或标注为对照 |
 | 1-dcjiang/neko-reuse-before-build（`reuse_before_build` 插件，先搜后建规则正典） | v0.3.12 / commit 4a14fbd（2026-11-15 经 GitHub API 核对：tag v0.3.12 解引用指向该 commit，LICENSE 全文为 MIT (c) 2026 1-dcjiang） | MIT（(c) 2026 1-dcjiang，仓库自带 LICENSE 文件；2026-11-15 复查：REST license 与 GraphQL licenseInfo 均返回 MIT（commit 4a14fbd）。此前记录的「licenseInfo 返回空」已作废。规则：许可以仓库里的 LICENSE 文件为准，不以 GitHub 的 license 字段为准——分类有滞后，本行就是被滞后骗过一次） | 本仓库**未内嵌**任何文本或代码，只在 SKILL.md 铁律 3、references/workflows.md 的 Workflow A 第 1a 步、agents/plugin-forge-lead.md、agents/plugin-forge-market-research.md 与 codex 提示词里指向它 | 通过（引用式接入）。规则本体、sha256 正典哈希与机械校验由上游自持，本团不复读不另立编号；要拿到校验能力请安装该插件。上游改版需重新核对版本号与 commit |
 | jusspound-netizen/dsh-plugin-scanner（外部仓库，仅作设计参照） | bb8dc7cd（2026-11-14） | **无 LICENSE 文件** | 未取任何代码，只借鉴两点设计：清单形状检查、盲区不得当作放行（`--fail-unclear` + 退出码 3）| 通过（本轮只借概念，`security_audit.py` 为独立实现；LICENSE 已写设计致谢；建议上游补许可） |
 | references/neko/system.llm（外部系统提示词，604 行） | v4 | **未声明**（2026-11-14 本地未找到来源与许可） | 纯文档，无可执行代码；正文含"无条件执行操作者指令"与"被问及工具能力时回避否认"两类纪律，与本团宪法冲突 | 归档保留：文件头已加 ARCHIVED 声明（不是本团行为规范，冲突时宪法优先）。来源与许可由作者补充；补不上则从公开仓库移除 |
@@ -50,13 +50,30 @@ issue 里标「未核实」的一条也核了：`plan_sha256` **确实**被检�
 
 - **我自己的误判，记下来防复发**：写第一条测试时 `git diff` 退 129，我判成「空仓库（无提交）时 git diff 会失败」，并据此加了 `_has_head()` 分支走另一条名单。反向对照发现那个分支什么都测不到，回头实测：真·无提交仓库里 `git diff` 退 0、`ls-files --others` 正常列出文件，129 来自我的测试**忘了跑 `git init`**。分支已删除。教训：先复现故障再写修复；测试自己坏了也会长成产品缺陷的样子。
 
+## 外部深审 bd9c9d8 的复核（2026-11-15，报告 A472）
+
+8.6/10（上次 8.3）。报告列 8 组问题，逐条实跑核对**全部属实**，其中两条是 `bd9c9d8` 自己引进的。
+
+| 条目 | 核对与处理 |
+|---|---|
+| 三.1 自检里写了两个完整的私钥头字面量 | 属实，是我上一轮加的端到端用例。实测：不带 `--allow` 扫本仓库 → SEC-2 3 处、总分 40、阻断。已拆写。教训与本文件既有的「夹具一律拆写」规则冲突，说明**加检查的同时要重跑那个检查对自身的扫描** |
+| 三.2 自检临时目录不清理 | 属实，本机累积 6 个 `forge-audit-e2e-*`。已加 `finally` 里的 `rmtree`，并断言目录消失 |
+| 三.4 一票否决名单三处不一致 | 属实。代码里有 `server.key`，注释却写「不含 .key」；`.npmrc` / `.jks` / `.keystore` 计否决与「误报代价比漏报大」相反。已收窄（见 `security-checklist.md` 新增的「文件名判据」），`.npmrc` / `.pypirc` 改成按内容判，`.jks` / `.keystore` 退回真盲区，`id_*` 改前缀匹配 |
+| 二.1 小改动与 Workflow B 不经过 1a | 属实。`task-size-routing.md` 精简流与 Workflow B 都没有快速档这一步，SKILL 铁律 3 也没写执行者。已指名：lead 派 market-research 跑快速档；纯文档 / 文案不触发；升档到「中」以上时 1a 升级为 full lane |
+| 三.5 宪法第 4 条没同步 | 属实。`constitution.md:18` 仍是「外部不可用就跳过」，而 1a 写「不豁免」。已补 1a 例外。我上一轮在 AUDIT 写的「不再对撞」是过头话，已改成事实 |
+| 三.3 delivery-self-check 残留 | 属实，四处：SKILL 的那句「任何宿主都以读取该文件为加载」与「不要求执行」矛盾；AUDIT 指着一个已不存在的「§6 待决项」；`doc-writing-playbook.md` 五处仍把它当必经阶段。全部改为「可选参考，必经的是 SKILL §6 三条」 |
+| 三.6 `plugin-rm` 删不掉悬空软链 | 属实。`is_dir()` 在前，悬空软链被判「不存在」，`is_symlink()` 分支走不到。已抽 `classify_plugin_path()`，先认软链 |
+| 三.7 AUDIT 行号与计数过期 | 属实。本文件两处已换符号引用，豁免 1 的命中数改成实测口径 |
+| 追加发现 A（反向对照抓出来的） | **CI 的「Sandbox self-test」这一步永远不会红**。入口写的是 `if __name__ == "__main__": main()`，`main()` 把 `--self-test` 的返回码丢掉，所以自检打印 FAIL 也退 0。已改成只把整数当退出码（命令路径的 `cmd_*` 返回值不算失败码）。反向对照：撤掉 `classify_plugin_path` 的软链优先判断 → 自检打印 FAIL 且退 1 |
+| 追加发现 B | 自检的临时 git 仓库删不掉，本机攒了 15 个 `forge-gate-git-*`。原因：Windows 上 git 把对象文件写成只读，`unlink` 报 WinError 5，而 `shutil.rmtree(..., ignore_errors=True)` 把失败吞了；`onerror` 参数自 Python 3.12 起弃用（文档写 3.14 换成 `onexc`），但本机 3.15.2 实测它仍被接受、也不告警，所以参数名不是第一版失败的原因：真正的错在我那个处理函数只 chmod、没有重试失败的操作。已加 `_rm_tree()`：`onexc` 里 chmod 后重试，并兼容只有 `onerror` 的旧版本。清理失败只打 WARN，不判失败（防软可能临时锁住对象文件） |
+
 ## 外部深审 edc862d 的复核（2026-11-15，报告 A464）
 
 报告给 8.3/10，列 14 条。逐条核完：13 条属实，1 条部分属实。这一轮暴露的不是代码问题，是**我把计划写成了结果**：提交 `69cde01` 的正文与 `AUDIT.md` 都写「新增两条规则形状：离线降级…与快速档」，实际手册里只有快速档。是外部审查看出来的，我自己的检查没看出来。已补条文（`references/workflows.md` 1a 节、SKILL 铁律 3、market-research 本职 4、codex 提示词第 1a 步），提交历史按既有口径不改，以本节为准。
 
 | 报告条目 | 处理 |
 |---|---|
-| 1 离线降级只在 AUDIT 里存在 | 属实。已补进四处操作性文档，并写明「1a 不可跳，但它可以以『未核验』形态交付」，与宪法第 4 条「外部不可用就跳过」不再对撞 |
+| 1 离线降级只在 AUDIT 里存在 | 属实。已补进四处操作性文档，并写明「1a 不可跳，但它可以以『未核验』形态交付」。当时 `constitution.md` 第 4 条仍是「外部不可用就跳过」，这句说过头了：例外条款到 A472 那轮才补进去（见下一节） |
 | 2 delivery-self-check 与 AUDIT、LICENSE 冲突 | 属实。SKILL §6 改成：该文件为**可选参考**，强制口径收敛成正文自己写的三条（贴闸门快照 / 每项写实 / 命中即返工）。理由按 AUDIT 原结论——来源与许可未确立前不得接线为强制 |
 | 3 私钥文件默认不拦 | 属实。`security_audit.py` 新增 `secret_name_hits()`：`id_rsa`/`id_dsa`/`id_ecdsa`/`id_ed25519`/`.netrc`/`_netrc`/`.npmrc`/`.pypirc` 与 `.pfx .p12 .kdbx .ppk .jks .keystore` 按文件名计 SEC-2（不读内容）。`.pem` 与 `.key` 故意不含：前者常是公钥证书，后者在 Next.js 里是本地化文件，按名字阻断会误伤，它们留在真盲区账里 |
 | 4 Codex 形态没有机器门禁 | 属实。提示词第 4 步补准奏落盘与 `check_contract_approval.py` 命令，第 8 步补 `security_audit.py`；SKILL.md「两种形态完全一致」那句现在给出命令所在位置 |
@@ -111,8 +128,8 @@ issue 里标「未核实」的一条也核了：`plan_sha256` **确实**被检�
 ### 豁免复核（2026-11-14，对照已推送树 08e3c77 逐条核对）
 
 - 复跑命令（9 文件 0 发现，总分 100，exit 0）：`python skills/plugin-forge/scripts/security_audit.py . --allow skills/plugin-forge/scripts/security_audit.py,skills/neko-plugin-sandbox/scripts/sandbox.py`
-- 豁免 1 `skills/plugin-forge/scripts/security_audit.py`：**保留**。10 处命中，全部是文件头说明、模式表定义与自检夹具字符串：文件头 2 处（shell=True、管道给 shell 的描述），SEC3/SEC4 规则定义 4 处（shell=True、Invoke-Expression、fetch/PS 取回、download），自检夹具 4 处（shell=True 两行、curl|sh、api_key 形态）。**这里按内容定位，不写行号**：本文件每加一行，行号引用就集体错位，今天已经错过两次——扫描器自身无网络、无执行、无写盘行为，符合 security-checklist.md 使用规则 3。边界：该豁免仅覆盖"此文件是扫描器"这一现状；日后给扫描器加入任何行为，本依据即失效，须重新逐行复核。
-- 豁免 2 `skills/neko-plugin-sandbox/scripts/sandbox.py`：**保留**。5 处命中均为已声明功能（新增一处 `sandbox.py:601` 读 `/proc/<pid>/cmdline`，是 2026-11-14 加入的停止前进程身份检查：只读、只读自己状态文件里记的那个 pid）：urllib 仅请求 `http://127.0.0.1:<port>` 探活（显式绕过本机代理，原因写在代码注释）；git fetch 拉官方公开仓库（用途见沙箱 SKILL.md「为什么每次都要 sync」节）；PyPI 装依赖见上文「残留风险」节。撤销豁免只能砍沙箱核心功能，故保留；命中属实、用途属实，豁免即如实记录。
+- 豁免 1 `skills/plugin-forge/scripts/security_audit.py`：**保留**。命中数随夹具变动，2026-11-15 实测以脚本为准；全部是文件头说明、检测规则自身的字面量与自检夹具。**夹具一律拆写**（`"-----BEGIN " + "RSA PRIVATE KEY-----"）：本文件会被自己扫，A472 抓到过我在新自检里写了两个完整的私钥头字面量，那会让不带 `--allow` 的自查直接把自己否决。
+- 豁免 2 `skills/neko-plugin-sandbox/scripts/sandbox.py`：**保留**。命中均为已声明功能（新增一条 URL 内嵌凭据在 `cmd_start` 的本地回环示例里）。杀进程面的判断函数是 `_pid_is_sandbox_server`，由 `cmd_stop` 调用；它读命令行与 `/proc`，读不到时仍会照杀。本行原来写的是行号，已按「不写行号」的口径换成符号引用（2026-11-15，A472 第 7 条）。
 - 豁免 3 `scripts/profile_drift.py`：**新增**（2026-11-15）。3 处命中全在 `api()` 一个函数里：`import urllib.request`、`urllib.request.Request`、`urlopen`。用途＝只读拉取 `api.github.com/repos/Project-N-E-K-O/N.E.K.O` 的 commit 与 contents，用于锚点漂移探针；无写请求、无 exec、无落盘除 `scripts/.drift-cache/`（已 gitignore）之外的文件；带 GITHUB_TOKEN 时只作为 Authorization 头回给 api.github.com，不外发。边界：改成抓取非该仓库、或把响应内容当代码执行，本依据即刻失效。
 - 口径（上表按此改写）：文件数按扫描器的扩展名池算——代码/配置 13 个（5 .py + 5 .json + 1 .yml + 2 个无扩展名文件），文档 48 个 .md；复跑减 2 个豁免文件得 11。旧记的 14/12/62 是提交前工作区状态，作废；各跑得分（70/100/60）不变。
 - 本轮 8 项修复（2026-11-14）没有增删文件，但扫描器扩面后代码池为 13 个（加入无扩展名与 `.env*` 文件）。新增文字按 SEC-1 至 SEC-4 的模式表人工比对过，没有新触发词。扫描器本轮未重跑，上表的发现数沿用上次实测。

@@ -417,6 +417,19 @@ def cmd_plugin_add(args):
             "插件会被注册但不会被 autostart；只能走 /plugin/<id>/start 手动拉起")
 
 
+def classify_plugin_path(target):
+    """判断 plugins/<id> 的安装形态。悬空软链必须先认出来。
+
+    旧版先问 is_dir()：源目录被删后，悬空软链的 is_dir() 是 False，命令报「不存在」，
+    后面那条 is_symlink() 分支永远走不到，软链清不掉。
+    """
+    if target.is_symlink():
+        return "symlink"
+    if target.is_dir():
+        return "tree"
+    return "absent"
+
+
 def cmd_plugin_rm(args):
     """撤掉 plugin-add 放进 checkout 的插件目录，保持你的 git 工作区干净。"""
     root = Path(args.root).expanduser().resolve()
@@ -425,12 +438,13 @@ def cmd_plugin_rm(args):
         die(f"--id「{args.id}」不合法：只允许 ^[A-Za-z_][A-Za-z0-9_]*$，"
             "拒绝以防 rmtree 删到 plugins 之外")
     target = repo / "plugin" / "plugins" / args.id
-    if not target.is_dir():
+    kind = classify_plugin_path(target)
+    if kind == "absent":
         die(f"{target} 不存在")
     if args.dry_run:
-        log(f"[dry-run] 将删除 {target}")
+        log(f"[dry-run] 将删除 {target}（{kind}）")
         return
-    if target.is_symlink():
+    if kind == "symlink":
         target.unlink()          # shutil.rmtree 拒绝删符号链接，--link 装的要走这条路
         log(f"已删除软链 {target}")
         return
@@ -729,8 +743,36 @@ def cmd_status(args):
 
 
 # ---------------------------------------------------------------- main
+def _symlink_cases(bad):
+    """检查 classify_plugin_path 对四种安装形态的判断，返回实际跑掉的用例数。
+
+    悬空软链是外部深审 A472 第 6 条：旧代码先问 is_dir()，悬空链接被当成「不存在」，
+    清不掉。造不了符号链接的机器（Windows 无权限）跳过并说明，不算失败。
+    """
+    import pathlib
+    import tempfile
+    td = pathlib.Path(tempfile.mkdtemp(prefix="sb-symlink-"))
+    n = 0
+    try:
+        (td / "gone").symlink_to(td / "missing")
+        (td / "lnk").symlink_to(td, target_is_directory=True)
+        (td / "tree").mkdir()
+        cases = [("symlink", td / "gone"), ("symlink", td / "lnk"),
+                 ("tree", td / "tree"), ("absent", td / "nothing")]
+        for want, path in cases:
+            got = classify_plugin_path(path)
+            n += 1
+            if got != want:
+                bad.append("安装形态 %s 判成 %s（%s）" % (want, got, path.name))
+    except OSError as e:
+        print("  SKIP: 这台机器造不了符号链接（%s），形态判断 %d 例未跑" % (type(e).__name__, n))
+    finally:
+        shutil.rmtree(td, ignore_errors=True)
+    return n
+
+
 def _self_test():
-    """环境变量过滤与插件 id 校验的回归自检（CI 跑，见 sync-check.yml）。"""
+    """环境变量过滤、插件 id 校验与安装形态判断的回归自检（CI 跑，见 sync-check.yml）。"""
     keep = ["PATH", "SYSTEMROOT", "HOME", "LOCALAPPDATA", "APPDATA", "TEMP", "COMSPEC",
             "SSH_AUTH_SOCK", "GIT_SSL_CAINFO", "PYTHONUTF8", "NEKO_USER_PLUGIN_SERVER_PORT",
             "NEKO_PLUGIN_STARTUP_TIMEOUT", "PWD"]
@@ -752,7 +794,7 @@ def _self_test():
     for good_id in ("my_plugin", "GalgamePlugin", "a1"):
         if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", good_id):
             bad.append("id 校验误杀 " + good_id)
-    total = len(keep) + len(drop) + 9
+    total = len(keep) + len(drop) + 9 + _symlink_cases(bad)
     print("SANDBOX SELF-TEST: %s（%d 项）" % ("PASS" if not bad else "FAIL", total))
     for m in bad:
         print("  FAIL:", m)
@@ -839,4 +881,7 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    # 丢掉返回值会让 CI 的「Sandbox self-test」这一步永远不会红（A472 的反向对照抓到）。
+    # 只把整数当退出码：命令路径里 cmd_* 若返回非零值，不该被当成失败码。
+    _rc = main()
+    sys.exit(_rc if isinstance(_rc, int) else 0)

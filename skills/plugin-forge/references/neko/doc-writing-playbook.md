@@ -112,7 +112,7 @@
 | `grill-with-docs` | 已登记 / user-invoked | 追问 + 边问边产出 **ADR 与 glossary**；外部 ADR Skill 的本机替代，优先用 |
 | `handoff` | 已登记 / user-invoked | 会话交接；「不复制既有 artifact，用路径/URL 引用」与宪法 #3 一致 |
 | `to-spec` / `to-tickets` / `triage` | 已登记 / user-invoked | 会话 → spec / tickets / issue 状态机，主理人编排已在用 |
-| `delivery-no-pseudoblock` | 未挂接 | **交付前 D1–D12 行为闸门**；管「责任/闭环」，与 §6.1 文风清单**分层串行**，见台账 §6 |
+| `delivery-no-pseudoblock` | 可选参考（来源与许可未确立，见 `AUDIT.md`） | 交付前行为闸门 D1–D12 的**参考清单**；必经口径是 plugin-forge SKILL §6 自己写的三条，与 §6.1 文风清单**分层串行** |
 
 ### 2.2 外部候选（只读审阅，不安装）
 
@@ -129,7 +129,7 @@
 2. 终稿润色 → stop-slop 自评分 + humanizer 声音匹配（仅借鉴规则，不装）；
 3. PR / 变更说明 → 套 `pr` skill 三段结构 + 可视化；
 4. 代码库文档 → 优先 `grill-with-docs` 出 ADR，其次走 §3 local-first 技能；
-5. 门禁 → 行为闸 `delivery-no-pseudoblock` → 文风清单 §6.1 → `ste-lint.py --fail-over 2.5`（装了才跑）。
+5. 门禁 → 行为闸（SKILL §6 三条，实测为准；`delivery-self-check.md` 为可选参考）→ 文风清单 §6.1 → `ste-lint.py --fail-over 2.5`（装了才跑）。
 
 ---
 
@@ -171,7 +171,7 @@
   - 产物是 skill / `AGENTS.md` / `CLAUDE.md` → 加 `writing-for-agents` 的 context pointer 措辞检查。
   - 通用交付物 → ASD-STE100 Layer1+2 打底。
 - **Phase 3 反 slop 润色**：ASD-STE100 → 借鉴 stop-slop 自评分与 humanizer 声音匹配（**仅借鉴规则，不安装**）。**Guard：绝不删事实 / 数字 / 条件 / 范围限定词凑长度**（如 `on macOS only` / `measured one time` / `n=6` 必须留）；缺细节就问，绝不编造。
-- **Phase 4 门禁（三层串行）**：① `delivery-no-pseudoblock` D1–D12 行为闸 → ② §6.1 文风清单 → ③ 装了 kit 才跑 `ste-lint.py --fail-over 2.5`；PR 另走 `pr` 结构与证据分级。任一层不过回到对应阶段。
+- **Phase 4 门禁（三层串行）**：① 行为闸（SKILL §6 三条 + 台账 D1–D12 参考清单）→ ② §6.1 文风清单 → ③ 装了 kit 才跑 `ste-lint.py --fail-over 2.5`；PR 另走 `pr` 结构与证据分级。任一层不过回到对应阶段。
 - **Phase 5 收口**：结论先行 + 证据分级（`[FACT]`/`[INFERENCE]`/`[GUESS]`/`未核验`）+ 完整可运行（命令 / 配置可复制）。
 
 ---
@@ -332,12 +332,12 @@ node "$HOME/.claude/skills/asd-ste100/hooks/run-python.cjs" \
 | 把讨论变成 spec | `to-spec` | **user-invoked** `/to-spec` | spec（发布到配置的 issue tracker） | 需 tracker + triage 词表 |
 | 把 spec / 计划拆成 tracer-bullet tickets | `to-tickets` | **user-invoked** `/to-tickets` | 每票声明 blocking edges | 需 tracker 配置 |
 | issue / 外部 PR 分诊、写 agent-ready brief | `triage` | **user-invoked** `/triage` | 状态机流转 + brief | 需 tracker 配置 |
-| **任何交付物发出前的行为终检** | `delivery-no-pseudoblock` | 模型直调，**须真加载 Skill 工具** | D1–D12 闸门快照（禁止声明替代扫描） | 与 §6.1 **串行，不互替** |
+| **任何交付物发出前的行为终检** | SKILL §6 三条（`delivery-no-pseudoblock` 为可选参考） | 模型直调，须真做实测而非声明 | D1–D12 参考清单 + 三条闸门快照（禁止声明替代扫描） | 与 §6.1 **串行，不互替** |
 
 ### 8.2 组合与顺序（不可互换）
 
 1. **长文两阶段**：`writing-fragments`（explore，采碎片）→ `writing-beats` **或** `writing-shape`（exploit，二选一，不并行）。顺序颠倒或跳过 explore 会丢 Grounding。
-2. **三层串行**：**行为/责任**（`delivery-no-pseudoblock` D1–D12）→ **文风/文字**（§6.1 A/B/C/D 32 项）→ **结构/可触发性**（`pr` 三段、`writing-for-agents` context pointer）。任一层不能替代另一层，详见台账 §6。
+2. **三层串行**：**行为/责任**（SKILL §6 三条为准，`delivery-no-pseudoblock` 是可选参考清单）→ 文风/结构 → 工具实测。任一层不过回到对应阶段，不得以下一层通过代上一层。
 3. **门禁顺序**：行为闸 → 人工清单 → `ste-lint.py --fail-over 2.5`（**装了才跑，不假跑**；本机未装 asd-ste100 kit）。
 
 ### 8.3 总监直调纪律
