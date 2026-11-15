@@ -24,7 +24,7 @@
 设计参照：清单形状检查与「盲区不得当作放行」两点取自 jusspound-netizen/dsh-plugin-scanner
 （bb8dc7cd，2026-11-14；该仓库无 LICENSE 文件，本文件为独立实现，未复制其代码）。
 """
-import sys, os, re, json, argparse
+import sys, os, re, json, argparse, tempfile
 
 SKIP_DIRS = {".git", "node_modules", "__pycache__", ".venv", "venv", "dist",
              "build", ".pytest_cache", ".mypy_cache", ".tox"}
@@ -172,6 +172,32 @@ BY_DESIGN_KEYS = ("构建/缓存/VCS 目录", "不在扫描池", "--allow 豁免
 SECRET_FILE_EXTS = {".pem", ".key", ".pfx", ".p12", ".kdbx", ".ppk", ".jks", ".keystore"}
 SECRET_FILE_NAMES = {".netrc", "_netrc", ".npmrc", ".pypirc",
                      "id_rsa", "id_dsa", "id_ecdsa", "id_ed25519"}
+# 名字本身就等于泄露的那一类：不看内容也计 SEC-2（一票否决）。故意不含 .pem 与 .key——
+# 前者常是公钥证书，后者在 Next.js 里是本地化文件，按名字阻断会误伤；它们留在盲区账里。
+SECRET_FILE_HARD = {".pfx", ".p12", ".kdbx", ".ppk", ".jks", ".keystore"}
+SECRET_FILE_HARD_NAMES = SECRET_FILE_NAMES | {"private_key", "server.key"}
+
+
+def secret_name_hits(root, allow):
+    """按文件名找私钥材料。只走目录，不读内容：内容里就是私钥，不该被抄进报告。
+
+    默认口径以前把这类文件只记成盲区，一个入库 id_rsa 的仓库仍然 100 分退 0。
+    """
+    out = []
+    for dp, dn, fns in os.walk(root):
+        dn[:] = [d for d in dn if d not in SKIP_DIRS]
+        for fn in sorted(fns):
+            low = fn.lower()
+            ext = os.path.splitext(low)[1]
+            if ext not in SECRET_FILE_HARD and low not in SECRET_FILE_HARD_NAMES:
+                continue
+            rel = os.path.relpath(os.path.join(dp, fn), root).replace("\\", "/")
+            if any(rel == a or rel.startswith(a + "/") for a in allow):
+                continue
+            out.append({"file": rel, "line": 1,
+                        "note": "私钥材料文件入库（按文件名判定，未读内容）",
+                        "snippet": fn})
+    return out
 
 
 def blind_kind(entry):
@@ -332,6 +358,8 @@ def scan(root, include_docs, allow):
                 seen.add(k2)
                 findings["SEC-2"].append({"file": rel, "line": i, "note": note2,
                                           "snippet": line.strip()[:140]})
+    for h in secret_name_hits(root, allow):
+        findings["SEC-2"].append(h)
     return scanned, findings, skips, unclear, adv
 
 
@@ -456,6 +484,18 @@ def _self_test():
         helper_bad.append("密钥材料文件必须算真盲区，不能算设计内排除")
     if ".pem" in CODE_EXTS | CONFIG_EXTS | DOC_EXTS:
         helper_bad.append(".pem 不该进可读池：里面的私钥会被抄进报告")
+    # 端到端：真造一个目录跑 iter_files / scan，而不是只喂字面量给 blind_kind。
+    e2e = tempfile.mkdtemp(prefix="forge-audit-e2e-")
+    with open(os.path.join(e2e, "srv.pem"), "w", encoding="utf-8") as f:
+        f.write("-----BEGIN RSA PRIVATE KEY-----\nMIIB\n")
+    with open(os.path.join(e2e, "id_rsa"), "w", encoding="utf-8") as f:
+        f.write("-----BEGIN OPENSSH PRIVATE KEY-----\n\n")
+    _sc, _fd, _sk, _un, _ad = scan(e2e, False, [])
+    if blind_kind("srv.pem（密钥材料文件 .pem，内容不读）") == "excluded" \
+            or not any("密钥材料" in s for s in _sk):
+        helper_bad.append("iter_files 没把 .pem 记成密钥材料盲区：%s" % _sk)
+    if not any(h["file"] == "id_rsa" for h in _fd["SEC-2"]):
+        helper_bad.append("id_rsa 按文件名没计进 SEC-2，入库私钥仍会被放行")
     if len(manifest_gaps("package.json", '{"name":"x"}')) < 2:
         helper_bad.append("package.json 缺 license/repository 没报出来")
     # plugin.toml 必填要按节判定：子段里的同名键不能顶掉顶层缺项
@@ -496,7 +536,13 @@ def _self_test():
     bad = [c for c in cases if hit(c[0], c[1]) != c[2]]
     for cid, line, want in bad:
         print("SELF-TEST FAIL: %s want=%s got=%s %r" % (cid, want, hit(cid, line), line))
-    n = len(cases) + len(sec5_cases) + len(extra) + 16
+    # 例数实算：写死的常量已经两次落后于实际检查数（11→16→18）。
+    try:
+        src = open(__file__, encoding="utf-8").read()
+        helpers = src.count("helper_bad." + "append(")
+    except OSError:
+        helpers = 0
+    n = len(cases) + len(sec5_cases) + len(extra) + helpers
     ok = not (bad or s5_bad or e_bad or helper_bad)
     print("SEC-1/2/5 + 边界自检: %s（%d 例）" % ("PASS" if ok else "FAIL", n))
     return 0 if ok else 1

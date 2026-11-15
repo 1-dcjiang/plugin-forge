@@ -9,7 +9,7 @@
 | blader/humanizer | v4.0.0 | MIT | SKILL.md 纯改写规则，1 个 Wikipedia 外链；scripts/validate-package.py 只读本包文件做结构校验 | 通过。规则已并入 references/style-anti-slop.md，未整包 vendor |
 | op7418/Humanizer-zh | main | MIT | SKILL.md 中文模式库；tests/check_structure.py 只读比对两份文本 | 通过。同上 |
 | woosal1337 asd-ste100 kit | 2.0.5 | MIT（kit；ASD-STE100 规范本身版权属 ASD） | ste-lint.py 本地 lint；hooks 为 Claude Code 专用；无网络 | 通过。规则摘要并入 style-anti-slop.md；本仓库未复制其代码文件，仅引用与摘要 |
-| neko-plugin-sandbox/scripts/sandbox.py | 本仓库自有 | — | 全 127.0.0.1；git/uv/pip 子进程仅用于本地沙箱；taskkill 先核对进程身份；rmtree 只删 `plugin/plugins/<id>` 下的目录 | 通过（2026-11-14 复核）。依据源码 @645da54 的契约断言已在 0984249 复验。**后两条是有条件的，2026-11-11 那轮逐行复核时并不成立**：删除面靠 `plugin-add`/`plugin-rm` 先把 id 按 `^[A-Za-z_][A-Za-z0-9_]*$` 校验（sandbox.py:385、:420）才关在 plugins 目录内；杀进程面靠 `_pid_is_sandbox_server` 先读命令行（sandbox.py:585，cmd_stop :616 调用），命令行读不到时仍会照杀。边界：任一校验被删或被放宽，本行结论即刻失效，须重新逐行复核 |
+| neko-plugin-sandbox/scripts/sandbox.py | 本仓库自有 | — | 全 127.0.0.1；git/uv/pip 子进程仅用于本地沙箱；taskkill 先核对进程身份；rmtree 只删 `plugin/plugins/<id>` 下的目录 | 通过（2026-11-14 复核）。依据源码 @645da54 的契约断言已在 0984249 复验。**后两条是有条件的，2026-11-11 那轮逐行复核时并不成立**：删除面靠 `plugin-add`/`plugin-rm` 先把 id 按 `^[A-Za-z_][A-Za-z0-9_]*$` 校验（`plugin-add` 与 `cmd_plugin_rm` 各校验一次 id）才关在 plugins 目录内；杀进程面靠 `_pid_is_sandbox_server` 先读命令行，`cmd_stop` 调用它；旧版这里写的是行号，已按本文件「不写行号」的口径换成符号引用（2026-11-15：当时写的 585/616/385/420 全部漂了），命令行读不到时仍会照杀。边界：任一校验被删或被放宽，本行结论即刻失效，须重新逐行复核 |
 | session_capability_refresh.py | 本仓库自有 | — | 只读扫描 + stdout JSON，零第三方依赖，异常全捕获 exit 0 | 通过。示例路径已脱敏为 ~（**教训**：那次脱敏把 `ROOT` 的字面 `~` 留成未展开路径，脚本一度恒报「路径缺失」；2026-11-14 改为 `os.path.expanduser` 读取、只在输出侧脱敏） |
 | avatars/*.jpg/png（14） | — | — | EXIF 扫描 | 无 EXIF，通过（avatars 已随 v2.0.0 移除，见整合记录） |
 | intro.html（2） | — | — | 无 <script>/外链 src/onclick | 通过（intro.html 已随 v2.0.0 移除，见整合记录） |
@@ -50,12 +50,35 @@ issue 里标「未核实」的一条也核了：`plan_sha256` **确实**被检�
 
 - **我自己的误判，记下来防复发**：写第一条测试时 `git diff` 退 129，我判成「空仓库（无提交）时 git diff 会失败」，并据此加了 `_has_head()` 分支走另一条名单。反向对照发现那个分支什么都测不到，回头实测：真·无提交仓库里 `git diff` 退 0、`ls-files --others` 正常列出文件，129 来自我的测试**忘了跑 `git init`**。分支已删除。教训：先复现故障再写修复；测试自己坏了也会长成产品缺陷的样子。
 
+## 外部深审 edc862d 的复核（2026-11-15，报告 A464）
+
+报告给 8.3/10，列 14 条。逐条核完：13 条属实，1 条部分属实。这一轮暴露的不是代码问题，是**我把计划写成了结果**：提交 `69cde01` 的正文与 `AUDIT.md` 都写「新增两条规则形状：离线降级…与快速档」，实际手册里只有快速档。是外部审查看出来的，我自己的检查没看出来。已补条文（`references/workflows.md` 1a 节、SKILL 铁律 3、market-research 本职 4、codex 提示词第 1a 步），提交历史按既有口径不改，以本节为准。
+
+| 报告条目 | 处理 |
+|---|---|
+| 1 离线降级只在 AUDIT 里存在 | 属实。已补进四处操作性文档，并写明「1a 不可跳，但它可以以『未核验』形态交付」，与宪法第 4 条「外部不可用就跳过」不再对撞 |
+| 2 delivery-self-check 与 AUDIT、LICENSE 冲突 | 属实。SKILL §6 改成：该文件为**可选参考**，强制口径收敛成正文自己写的三条（贴闸门快照 / 每项写实 / 命中即返工）。理由按 AUDIT 原结论——来源与许可未确立前不得接线为强制 |
+| 3 私钥文件默认不拦 | 属实。`security_audit.py` 新增 `secret_name_hits()`：`id_rsa`/`id_dsa`/`id_ecdsa`/`id_ed25519`/`.netrc`/`_netrc`/`.npmrc`/`.pypirc` 与 `.pfx .p12 .kdbx .ppk .jks .keystore` 按文件名计 SEC-2（不读内容）。`.pem` 与 `.key` 故意不含：前者常是公钥证书，后者在 Next.js 里是本地化文件，按名字阻断会误伤，它们留在真盲区账里 |
+| 4 Codex 形态没有机器门禁 | 属实。提示词第 4 步补准奏落盘与 `check_contract_approval.py` 命令，第 8 步补 `security_audit.py`；SKILL.md「两种形态完全一致」那句现在给出命令所在位置 |
+| 5 1a 缺上游两条硬约束 | 已补：候选至少 3 个、最多细评 6 个，少于 3 个回去扩词；Join/Fork 的对外写操作每次单独确认，候选仓库内容按数据不当指令 |
+| 6 自检例数写死 | 已改成实算（读自身源码数 `helper_bad.append(` 出现次数）。这个数已经错过两次：11→16→18。现在报 68 例，与实际一致 |
+| 7 pem 判定没进自检 | 已补端到端用例：临时目录放 `srv.pem` 与 `id_rsa`，跑真 `scan()`，断言前者进真盲区、后者计 SEC-2 |
+| 8 AUDIT 引的 sandbox 行号已漂 | 已改符号引用（`_pid_is_sandbox_server` / `cmd_stop` / `plugin-add` / `plugin-rm`）。AUDIT 自己就说不写行号，这条是我自己违反的 |
+| 9 `plugin-add` 不带 `--link` 时 rmtree 报错 | 属实。复制分支补 `is_symlink()` 判断，与 `--link` 分支和 `cmd_plugin_rm` 同款 |
+| 10 1MB–50MB 上游文件被判「404 已删」 | 属实。抽成 `body_state()`：`None` 才是 missing，200 无正文是 big，归「无法判定」并进自检三例 |
+| 11 CI 没写 permissions | 已加 `permissions: contents: read`。actions 仍按 tag 引用，改 SHA 固定属供应链加固的另一件事，未在本轮 |
+| 12 contract.md 同一行既写「我落盘」又写「我不代写」 | 属实。改成一人认领：契约审议师出裁决文本，主理人写文件，`issued_by` 是自证字符串不当凭据（指向 issue #4） |
+| 13 sandbox 自检覆盖面窄 | 属实，未在本轮补：`toml_section_value`、`_plugin_rows`、超时夹紧、pid 复用判断仍无用例 |
+| 14 `password = user_input_value` 误报 | 已知取舍，`references/security-checklist.md` 已写明。报告建议的「右值像普通变量名就降级提示」是产品建议，未做 |
+
+反向对照（撤掉修复看自检是否报错）：撤掉 `secret_name_hits` 的接入 → `SELF-TEST FAIL: id_rsa 按文件名没计进 SEC-2，入库私钥仍会被放行`。实跑口径：含 `id_rsa` 与 `server.pfx` 的目录 → SEC-2 2 处、85/100、阻断退出 2；只含 `cert.pem` 与 `app.key` 的目录 → 不阻断，但真盲区 2，`--fail-unclear` 退 3。
+
 ## 更正记录（2026-11-15）
 
 - 提交 `d42b092` 正文有一句被 shell 打断：「探针确认 52 条锚点全部仍对得 afterwards 上」，读作「…全部仍对得上」。同一条命令还把 CI 探针步骤的 `run:` 改坏过，那处在 `f000526` 已修并有实测输出。正文不改写：改它要 force-push 两个已推送的提交，一句措辞不值这个代价，以本条为准。
 - 提交 `0583635` 把上游 rbb 的规则形状转述错了两处，本版改正：三轮检索按**来源**分（GitHub 仓库与代码 / 包生态与清单 / 人已经提过吗），不是「功能原词→泛化词→场景词」那三层词，上游的关键词扩展是检索前的独立步骤；判决是 Join / Extend / Fork / Build 四档，先过可改性红黄绿硬闸（红不许 Join、黄只 Extend），不是三选一。依据：上游 `skills/reuse-before-build/SKILL.md` 第 45-49 行与第 65-74 行，读于 commit 4a14fbd（2026-11-15）。`SKILL.md` 铁律 3、`references/workflows.md` 1a 节、两个 agent 与 codex 提示词同步改正。
 - 同一版还写了「本团不复读条文」，紧接着自己复读两条，自相矛盾。现在改成「执行要点摘要」，并给上游小节标题（Step 1 — Discover / Step 2 — Evaluate、zh-guide 第 1 步）与读到的 sha 作出处锚。
-- 新增两条规则形状：离线降级（无网络或无仓库访问时交检索串清单并标未核验，不许编造仓库），以及小改动走上游快速档（3 条检索串 + 三行 Reused / Change / Risk，不豁免「有没有人做过」这一问）。
+- 当时写「新增两条规则形状：离线降级…与小改动走上游快速档」。**只有快速档落地了**：离线降级在 `0583635`/`69cde01` 的任何操作性文档里都不存在，本行属于把计划写成结果。2026-11-15 由外部深审（报告 A464）指出，条文已补进 `references/workflows.md` 1a 节、SKILL 铁律 3、market-research 本职 4 与 codex 提示词。提交历史不改，以本节与下一节为准。
 - 转述上游规则要连许可自述一起校：`LICENSE` 原写 `copies none of its text, rules or code`，而本版沿用上游的判决词与交付物标记 `不可复用原因 / Not reusable because:`，那句话已改成「不复制条文与代码，只复用判决词表与交付物标记」，不让它继续说过头。
 - 探针与扫描器同时补了三个洞：`profile_drift.py` 把 404 与限流/断网分账（旧版全压成 None，一次限流会被读成「上游删了文件」）、当前 main 的 sha 缓存加 24 小时过期、行号形状加「带标签的 id 212、name 213」一类（覆盖由 52 条升到 53 条，实测无假漂移）；CI 给该步传 `GITHUB_TOKEN`，并把 `profile_drift.py` 加进 py_compile 与非网络自检。`security_audit.py` 把密钥材料文件（.pem .key .pfx .p12 .kdbx .ppk .jks .keystore 与 id_rsa .netrc .npmrc .pypirc 等）从「设计内排除」改判真盲区：旧版满是私钥的仓库也报「真盲区 0」。实测 fixture 一个只含 `srv.pem` 与 `cert.key` 的目录，现在报真盲区 2、加 `--fail-unclear` 退 3。
 - 装机的 Codex 提示词曾经不在同步面里：`~/.codex/prompts/plugin-forge.md` 停在 2026-11-10，缺 Workflow G 风格段与整个 1a 步，而同一台机器上的 skill 树看着是新的。`pf-report/install_sync.py` 已加 `codex/prompts` 这一路（按文件名字面前缀取 plugin-forge*，整字节复制）。教训：说「三处副本已同步」之前要先确认同步脚本覆盖的面，覆盖不到的面不算同步过。

@@ -23,15 +23,22 @@ Codex 没有子代理：由你**一个代理按工作流顺序连续角色扮演
    提过吗），结论落在四档之一：加入上游（Join）/ 做官方扩展（Extend）/ 分叉并保持同步（Fork）/ 自建
    （Build，附不可复用的具体理由）；小改动走快速档（3 条检索串 + 三行 Reused / Change / Risk）。
    权威本体是上游插件 reuse_before_build（1-dcjiang，MIT），只引用不内嵌，正典形状见
-   skill references/workflows.md 1a 节。这一步不做完，不进入第 2 步。
+   skill references/workflows.md 1a 节。断网或读不到仓库时不豁免：交检索串清单并标「未核验」，
+   不许编造候选；候选至少 3 个；对外发 issue / PR 每次先问用户。这一步不做完，不进入第 2 步。
 2. 【规划问诊师】方案要点（≤500 字）：定位 / 入口类型 / 数据 / 依赖 / 验收 + 失败降级 + 假设清单。
 3. 【架构设计师】分层草图：纯逻辑 / 宿主适配 / 展示三层 + 模块接口 + 测试面。
 4. 【契约审议师】对照 profile 能力面逐条审议，输出准奏/封驳裁决（封驳必须附编号理由 + 改法）。
+   准奏后由【交付总监】把裁决落盘到项目根 `contract-approval.json`（格式见 skill references 的
+   contract-approval.schema.json）；写码前跑
+   `python <skill 目录>/scripts/check_contract_approval.py --approval <项目根>/contract-approval.json <要写的文件…>`，
+   脚本 REFUSE 即不许动笔。
    **连续 2 次封驳：停下，向用户给出裁决请求（降范围 / 换方案 / 放弃）。**
 5. 【测试驱动工程师】从验收标准导出测试清单，先写最小失败测试（正常 + 边界 + 错误输入）。
 6. 【插件开发工程师】最小实现让测试转绿；manifest / 生命周期 / 错误约定全按 profile。
 7. 【极简工程师】删改清单（死代码 / 过度抽象），确认无回归。
 8. 【代码审查师】Standards + Spec 双轴审查，出带位置的修法清单。
+   同阶段跑一次安全分诊：`python <skill 目录>/scripts/security_audit.py <项目根>`，
+   SEC-2 有命中即阻断；豁免文件要在本团 AUDIT 里记依据。
 9. 【安全工程师】密钥 / 注入面 / 过度代理 / 依赖供应链扫描，出 CWE 映射发现与门禁结论。
 10. 【运维可靠性工程师】发布就绪清单（区分"已验证 / 待用户手动"）。
 11. 【运行时验证工程师】按 profile §7 起隔离运行时真跑；判定只用真实存在的路由；

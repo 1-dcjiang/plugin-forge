@@ -393,7 +393,11 @@ def cmd_plugin_add(args):
         dest.symlink_to(src, target_is_directory=True)
         log(f"已软链 {src} -> {dest}")
     else:
-        if dest.exists():
+        # 先软链装、再不带 --link 重装时，dest 是符号链接：rmtree 会直接报错。
+        # 与上面 --link 分支同款处理，cmd_plugin_rm 也是这样判的。
+        if dest.is_symlink():
+            dest.unlink()
+        elif dest.exists():
             shutil.rmtree(dest)
         shutil.copytree(src, dest, ignore=shutil.ignore_patterns(".git", "__pycache__", "*.pyc"))
         log(f"已复制 {src} -> {dest}")

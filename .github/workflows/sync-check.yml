@@ -9,6 +9,8 @@ on:
 jobs:
   check:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read   # 只需要读仓库内容；探针用 GitHub 公开 API，带 github.token 提限额
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5

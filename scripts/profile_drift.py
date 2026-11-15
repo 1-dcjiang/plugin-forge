@@ -113,6 +113,17 @@ def resolve_head(use_cache=True, max_age=HEAD_TTL):
     return "", err2 or err or "net"
 
 
+def body_state(data):
+    """区分「上游没有这个文件」与「文件太大、API 不给正文」。
+
+    contents API 对 1MB–50MB 的文件返 HTTP 200 但不带 content。旧版把它算成 404，
+    于是探针会说「该文件已改名或已删除」——一个不存在的产品结论。
+    """
+    if data is None:
+        return "missing"
+    return None if data.get("content") else "big"
+
+
 def upstream_lines(path, head):
     """返回 (行列表, 故障)。故障非 None 时不能据此说上游没有该文件。"""
     os.makedirs(CACHE_DIR, exist_ok=True)
@@ -123,8 +134,9 @@ def upstream_lines(path, head):
     data, err = api("https://api.github.com/repos/%s/contents/%s?ref=%s" % (UPSTREAM, path, head))
     if err:
         return None, err
-    if not data or not data.get("content"):
-        return None, "missing"
+    state = body_state(data)
+    if state:
+        return None, state
     try:
         text = base64.b64decode(data["content"]).decode("utf-8", "replace")
     except Exception:
@@ -212,9 +224,9 @@ def check(anchors, head):
             rows.append(dict(an, status="gone", detail="上游 404：该文件已改名或已删除"))
             continue
         if lines is None:
-            rows.append(dict(an, status="unreachable",
-                             detail="限流（403/429），带 GITHUB_TOKEN 再跑" if err == "limited"
-                                    else "传输失败（超时或断网）"))
+            why = {"limited": "限流（403/429），带 GITHUB_TOKEN 再跑",
+                   "big": "文件超过 contents API 的正文上限（1MB），需改用 git blob API 才能核"}.get(err, "传输失败（超时或断网）")
+            rows.append(dict(an, status="unreachable", detail=why))
             continue
         drift, present = [], []
         for n in an["nums"]:
@@ -243,6 +255,9 @@ def self_test():
     cases = [
         (classify(404), "missing"), (classify(403), "limited"), (classify(429), "limited"),
         (classify(500), "net"), (classify(301), "net"),
+        # 200 但无正文 = 文件过大，不是上游 404
+        (body_state(None), "missing"), (body_state({"content": ""}), "big"),
+        (body_state({"content": "x"}), None),
         # issue 号带 #、章节号带 §，都不该被当成行号；「NNN 行」「:NNN」「（NNN」三种形状要抓到
         (window_nums("读于 :35 与 1050 行"), [35, 1050]),
         (window_nums("issue #3683 §4.2 自查 5、6、8"), []),
