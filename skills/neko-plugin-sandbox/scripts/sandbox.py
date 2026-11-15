@@ -441,7 +441,10 @@ def cmd_plugin_rm(args):
 # 缺一个必需变量会让沙箱以一个看不出关联的错误崩掉，而漏删只影响纵深防御的一层。
 # 不删 AUTH 形状的名字：SSH_AUTH_SOCK 会命中它，靠 git over SSH 的插件会丢掉 agent。
 SECRET_ENV_RE = re.compile(
-    r"(?i)(^|_)(TOKEN|SECRET|PASSWORD|PASSWD|PASS|KEY|APIKEY|CREDENTIAL|CREDENTIALS)($|_)")
+    r"(?i)(^|_)(TOKEN|SECRET|PASSWORD|PASSWD|PASS|PWD|KEY|APIKEY|CREDENTIAL|CREDENTIALS)($|_)")
+# PWD 单独放行：shell 的当前目录变量，删了会让插件里的相对路径调试摸不着头脑。
+# 但 MYSQL_PWD / DB_PWD 这类「前缀 + PWD」是真口令，照删。
+KEEP_EXACT = {"PWD"}
 # 上面按分隔符切词，会漏两种真实写法：PGPASSWORD（没有分隔符）和 DATABASE_URL（口令在值里）。
 SECRET_ENV_SUB = ("PASSWORD", "PASSWD", "SECRET", "TOKEN", "CREDENTIAL", "APIKEY")
 URL_CRED_RE = re.compile(r"://[^/\s:@]*:(?![\"\'<$])([^\s@\"\'<>{}$]{8,})@")
@@ -450,6 +453,8 @@ URL_CRED_RE = re.compile(r"://[^/\s:@]*:(?![\"\'<$])([^\s@\"\'<>{}$]{8,})@")
 def env_is_secret(name, value):
     """名字形状或值形状像凭据就删。宁可多删一个可选变量，也不把宿主 token 交给第三方插件。"""
     n = (name or "").upper()
+    if n in KEEP_EXACT:
+        return False
     if SECRET_ENV_RE.search(n):
         return True
     if any(s in n for s in SECRET_ENV_SUB):
@@ -724,8 +729,9 @@ def _self_test():
     """环境变量过滤与插件 id 校验的回归自检（CI 跑，见 sync-check.yml）。"""
     keep = ["PATH", "SYSTEMROOT", "HOME", "LOCALAPPDATA", "APPDATA", "TEMP", "COMSPEC",
             "SSH_AUTH_SOCK", "GIT_SSL_CAINFO", "PYTHONUTF8", "NEKO_USER_PLUGIN_SERVER_PORT",
-            "NEKO_PLUGIN_STARTUP_TIMEOUT"]
-    drop = ["GITHUB_TOKEN", "ANTHROPIC_API_KEY", "AWS_SECRET_ACCESS_KEY", "OPENAI_APIKEY",
+            "NEKO_PLUGIN_STARTUP_TIMEOUT", "PWD"]
+    drop = ["MYSQL_PWD", "DB_PWD", "GITHUB_TOKEN", "ANTHROPIC_API_KEY",
+            "AWS_SECRET_ACCESS_KEY", "OPENAI_APIKEY",
             "MY_SECRET", "SESSION_TOKEN_X", "DB_PASS", "PGPASSWORD", "ADMIN_PASSWORD",
             "DATABASE_URL", "db_credential"]
     vals = {"DATABASE_URL": "postgres://u:sup3rs3cr3tpw@db/x", "db_credential": "x"}
