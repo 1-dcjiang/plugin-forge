@@ -444,7 +444,7 @@ SECRET_ENV_RE = re.compile(
     r"(?i)(^|_)(TOKEN|SECRET|PASSWORD|PASSWD|PASS|KEY|APIKEY|CREDENTIAL|CREDENTIALS)($|_)")
 # 上面按分隔符切词，会漏两种真实写法：PGPASSWORD（没有分隔符）和 DATABASE_URL（口令在值里）。
 SECRET_ENV_SUB = ("PASSWORD", "PASSWD", "SECRET", "TOKEN", "CREDENTIAL", "APIKEY")
-URL_CRED_RE = re.compile(r"://[^/\s:@]+:[^/\s@]{8,}@")
+URL_CRED_RE = re.compile(r"://[^/\s:@]*:(?![\"\'<$])([^\s@\"\'<>{}$]{8,})@")
 
 
 def env_is_secret(name, value):
@@ -720,8 +720,41 @@ def cmd_status(args):
 
 
 # ---------------------------------------------------------------- main
+def _self_test():
+    """环境变量过滤与插件 id 校验的回归自检（CI 跑，见 sync-check.yml）。"""
+    keep = ["PATH", "SYSTEMROOT", "HOME", "LOCALAPPDATA", "APPDATA", "TEMP", "COMSPEC",
+            "SSH_AUTH_SOCK", "GIT_SSL_CAINFO", "PYTHONUTF8", "NEKO_USER_PLUGIN_SERVER_PORT",
+            "NEKO_PLUGIN_STARTUP_TIMEOUT"]
+    drop = ["GITHUB_TOKEN", "ANTHROPIC_API_KEY", "AWS_SECRET_ACCESS_KEY", "OPENAI_APIKEY",
+            "MY_SECRET", "SESSION_TOKEN_X", "DB_PASS", "PGPASSWORD", "ADMIN_PASSWORD",
+            "DATABASE_URL", "db_credential"]
+    vals = {"DATABASE_URL": "postgres://u:sup3rs3cr3tpw@db/x", "db_credential": "x"}
+    bad = []
+    for k in keep:
+        if env_is_secret(k, vals.get(k, "")):
+            bad.append("运行变量被误删: " + k)
+    for k in drop:
+        if not env_is_secret(k, vals.get(k, "abcdefghijkl12")):
+            bad.append("凭据形状没被删: " + k)
+    for bad_id in ("../../x", ".git", "a/b", "abs:C", "", "1abc"):
+        if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", bad_id):
+            bad.append("id 校验放过了 " + repr(bad_id))
+    for good_id in ("my_plugin", "GalgamePlugin", "a1"):
+        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", good_id):
+            bad.append("id 校验误杀 " + good_id)
+    total = len(keep) + len(drop) + 9
+    print("SANDBOX SELF-TEST: %s（%d 项）" % ("PASS" if not bad else "FAIL", total))
+    for m in bad:
+        print("  FAIL:", m)
+    return 0 if not bad else 1
+
+
 def main():
     ap = argparse.ArgumentParser(description="N.E.K.O 插件运行时沙箱")
+    ap.add_argument("--self-test", action="store_true",
+                   help="内置自检（CI 用），不需要 --root")
+    if "--self-test" in sys.argv:
+        return _self_test()
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     d = sub.add_parser("doctor", help="检查环境前置条件")

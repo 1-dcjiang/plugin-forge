@@ -94,7 +94,7 @@ python $S plugin-rm --root <ROOT> --id <插件id>          # 撤掉插件，恢�
 6. **宿主凭据不进沙箱** → 起服务前按变量名形状删掉带 TOKEN / SECRET / KEY / PASSWORD /
    CREDENTIAL 的宿主环境变量，并在日志里报删了哪些。范围只覆盖 `_server_env`（插件服务与
    插件进程）；`_uv_env`、`pip`、`git` 与建 venv 的子进程仍继承完整环境，因为 uv / pip 需要
-   代理与证书变量。这是纵深防御的一层，不是防火墙：
+   代理与证书变量。**值里带 URL 凭据的也删**（`DATABASE_URL=postgres://u:口令@db`），带口令的代理 URL（`HTTP_PROXY=http://u:口令@proxy`）同样会被删，换代理时注意；模板占位 `${…}`、`<…>` 不算凭据。这是纵深防御的一层，不是防火墙：
    插件仍以同一用户身份持有完整文件读权限与外网出口。
 
 **一处做不到的隔离（必须知道）**：插件的**代码**必须落在 `<ROOT>/repo/plugin/plugins/<id>/`，

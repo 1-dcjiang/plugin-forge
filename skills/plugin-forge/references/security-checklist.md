@@ -23,13 +23,16 @@ python ${FORGE_HOME}/scripts/security_audit.py <repo> [--allow 前缀1,前缀2] 
 
 要求：仓库内不得出现任何可用凭据（token、API key、私钥、password 形态赋值）。
 机器查：GitHub / OpenAI / AWS / Slack token 形态；`PRIVATE KEY` 块；URL 内嵌凭据（`scheme://user:pass@`）；明文赋值按**标识符拆词**判定 —— 键名按 `_` `.` `-` 与驼峰切词后命中 password / passwd / pwd / secret / token / credential / api_key / access_key / refresh_token 等，或整名含 password·secret·credential 这类高区分度子串（占位值已过滤）。
-已知边界：值不足 8 字符不报（`password = "abc"`）；`tokenizer` 这类同前缀词不误报；纯随机串（无关键词的 40 位 base64）扫不到，仍要人工抽查。
+值是**代码引用**时不算密钥，这是有意的排除面：属性路径（`args.password`）、全大写常量（`max_tokens=MAX_TOKENS`）、类型标注（`Optional[str]`）、纯数字（`token_count = 1234567890`）、普通 URL 值、与键同名的自引用（`self.password = password`）、函数调用右值。
+URL 内嵌凭据一条同样过滤模板占位：`${DB_PASSWORD}`、`<password>` 不算真口令。
+已知边界：值不足 8 字符不报（`password = "abc"`）；未加引号的纯字母口令（`PASSWORD=myword`）会被当变量引用漏掉；`tokenizer` 这类同前缀词不误报；不含任何关键词的纯随机串扫不到，仍要人工抽查。
 修法：改环境变量或宿主安全存储（对照 profile §6）；**已提交的凭据立即轮换**，并清理历史。
 判定：**任一真实命中 = 一票否决，直接阻断**，不参与总分。
 
 ### SEC-5 清单形状（不计分）
 
 要求：清单不夹带装包即执行的钩子，依赖走索引而不是直连远端包，必填字段齐。
+清单文件无条件进扫描池（`requirements.txt` 属 `.txt`，旧版不加 `--include-docs` 就读不到，而直连依赖最常写在这里）。
 机器查：`preinstall` / `postinstall` / `prepare` / `install` 钩子；`git+https://`、`.tar.gz`/`.whl`/`.zip` 直链；`cmdclass` / `setup_requires` 构建期执行；`plugin.toml` 缺 `id`/`name`/`version`/`entry`；`package.json` 缺 `license`/`repository`。
 计分：**不计入 100 分**，单独一栏输出，`--json` 里是 `sec5`。缺字段是发布前置条件而不是漏洞，混进评分会让真正的密钥命中失去区分度。
 
@@ -59,7 +62,10 @@ python ${FORGE_HOME}/scripts/security_audit.py <repo> [--allow 前缀1,前缀2] 
 - **修完再放**（退出码 1）：总分 50–89。每条发现给 位置 + 判定（真问题/误报/已声明）+ 修法。
 - **放行**（退出码 0）：总分 ≥ 90。
 - **不确定**（退出码 3，需加 `--fail-unclear`）：会放行，但存在盲区。给 CI 用时以「不确定」收尾，而不是让盲区冒充 0 发现。
-- 盲区两本账：`skips` 记没读的文件（超 2 MiB、含 NUL、扩展名不在池、`--allow` 豁免、构建目录）；`unclear` 记读了但行级规则读不动的文件（疑似压缩/混淆：有超长行或平均行长 >200）。两者都只说明「本次没有证据」，不等于通过。
+- 盲区分两本账，**只有真盲区能触发退出码 3**：
+  - 设计内排除 `excluded`：构建/缓存/VCS 目录、扩展名不在池（默认不扫的 `.md` 等）、`--allow` 豁免。把它们算进盲区的话，任何有 `.git` 或 README 的仓库都会恒为「不确定」，等于没有信号。
+  - 真盲区 `unread`：该读而没读到——超 2 MiB、含 NUL、`stat`/`open` 失败、`os.walk` 报错的目录，以及 `unclear`（读了但行级规则读不动：单行超长，或平均行长 >200 的压缩/混淆文件）。
+  - 一个文件都没读到（路径写错、扩展名池不对）直接判 3，不再给 100 分放行。
 
 ## 使用规则
 
