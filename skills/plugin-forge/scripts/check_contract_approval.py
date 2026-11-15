@@ -17,13 +17,17 @@
   - 放行条件（全部满足）：schema == plugin-forge/contract-approval@1；decision == "approved"；
     issued_by == "plugin-forge-contract"（自证字符串，只验记录不验身份）；未到 expires_at（缺省视为长期有效）；目标路径命中 scope 的某个 glob。
   - glob 语法：* 不跨 /；** 跨目录（src/** 覆盖 src 下任意深度）；不含 / 的模式按文件名匹配。
-  - 路径在项目根之外 → 拒绝（路径范围铁律）。
-  - 记录里填了 plan_sha256 时，plan_file 的内容必须还能算出同一个摘要；对不上就是方案被改过，旧准奏失效。未填 plan_sha256 的旧记录不受影响。
+  - 路径在项目根之外 → 拒绝（路径范围铁律）。与根没有公共祖先时（Windows 跨盘符）也算根外：
+    必须输出 REFUSE，不许让 relpath 的 ValueError 冒泡——异常会让整轮判定消失。
+  - 记录里填了 plan_sha256 时，plan_file 的内容必须还能算出同一个摘要；对不上就是方案被改过，旧准奏失效。未填 plan_sha256 的旧记录不受影响。填了摘要却没填 plan_file → 拒绝（无法确认方案未改）。
+  - --staged / --changed 走 git：--changed 含未跟踪的新文件（只看 git diff 会漏掉新建代码，
+    而那是门禁最该看见的一类）；git 输出按项目根解析，不按当前目录。
+  - 缺 expires_at 不拒绝，但打一行 WARN：长期有效的准奏会一直放行早就换掉的方案。
 
 退出码
   0 = 全部放行；1 = 存在拒绝（含准奏缺失/过期/decision=rejected）；2 = 用法错误。
 """
-import sys, os, re, json, argparse, datetime, tempfile, hashlib
+import sys, os, re, json, argparse, datetime, tempfile, hashlib, shutil
 
 SCHEMA_ID = "plugin-forge/contract-approval@1"
 ISSUER = "plugin-forge-contract"
@@ -290,8 +294,102 @@ def _self_test():
     if rs and rs[0][1]:
         ok = False
         print("SELF-TEST FAIL(plan): 方案被改后旧准奏仍放行")
+    # issue #3 的三条行为钉成回归测试。三条现在都是对的，但没有一条被测试守着：
+    # 报告是照着旧提交 1a2ac4f 写的，谁也不能保证下一次改动不把它撞回去。
+    # 1) 目标和项目根没有公共祖先。Windows 上 relpath 会抛 ValueError，旧版直接把它抛给
+    #    调用方：异常一冒泡，整轮判定消失，等于门禁没跑——比误放行更糟，因为它看着像崩了。
+    #    这条在 Windows 上走 ValueError 分支，在 Linux 上走 ../ 分支，结论必须一致。
+    try:
+        rs = check_targets(base(), os.path.realpath("Z:/forge-gate-fake"),
+                           [os.path.realpath("C:/forge-gate-fake/x/a.py")])
+        if not rs or rs[0][1] or "之外" not in rs[0][2]:
+            ok = False
+            print("SELF-TEST FAIL(越界): 期望 REFUSE 项目根之外，实际", rs)
+    except ValueError as e:
+        ok = False
+        print("SELF-TEST FAIL(越界): relpath 的 ValueError 漏到调用方了:", e)
+    # 2) 在子目录里跑：目标按 cwd 解析，rel 按项目根算，两者必须对上。
+    os.makedirs(J("sub"), exist_ok=True)
+    with open(J("sub", "nested.py"), "w") as f:
+        f.write("x = 1\n")
+    old_cwd = os.getcwd()
+    try:
+        os.chdir(J("sub"))
+        rs = check_targets(base(scope=["sub/**"]), root, ["nested.py"])
+        if not rs or not rs[0][1] or rs[0][0] != "sub/nested.py":
+            ok = False
+            print("SELF-TEST FAIL(子目录): 相对目标解析不对", rs)
+    finally:
+        os.chdir(old_cwd)
+    # 3) --changed 必须看见未跟踪的新文件，否则新建代码文件能绕过门禁。
+    #    两种仓库各验一遍：还没有提交的（脚手架阶段），和已经有提交的（日常阶段）。
+    if not shutil.which("git"):
+        print("SELF-TEST SKIP: 环境里没有 git，未跟踪文件那条不验")
+    else:
+        import subprocess
+
+        def _mkrepo(files, commit):
+            repo = tempfile.mkdtemp(prefix="forge-gate-git-")
+            for name in files:
+                with open(os.path.join(repo, name), "w") as f:
+                    f.write("x = 1\n")
+            def g(*names):
+                return subprocess.run(["git", *names], capture_output=True, cwd=repo,
+                                      env=dict(os.environ, GIT_AUTHOR_DATE="1700000000 +0800",
+                                               GIT_COMMITTER_DATE="1700000000 +0800")).returncode
+            g("init", "-q")
+            if commit:
+                g("add", "-A")
+                g("-c", "user.email=gate@test", "-c", "user.name=gate", "commit", "-qm", "t")
+            return repo
+
+        try:
+            bare = _mkrepo(["new_untracked.py"], False)
+            got = collect_git(bare, False, True)
+            if "new_untracked.py" not in got:
+                ok = False
+                print("SELF-TEST FAIL(--changed/空仓库): 未跟踪新文件没进名单", got)
+            if collect_git(bare, True, False) != []:
+                ok = False
+                print("SELF-TEST FAIL(--staged/空仓库): 空暂存区应给空名单")
+            full = _mkrepo(["tracked.py"], True)
+            with open(os.path.join(full, "brand_new.py"), "w") as f:
+                f.write("y = 1\n")
+            with open(os.path.join(full, "tracked.py"), "w") as f:
+                f.write("y = 2\n")
+            got = collect_git(full, False, True)
+            if not ({"tracked.py", "brand_new.py"} <= set(got)):
+                ok = False
+                print("SELF-TEST FAIL(--changed): 改动或未跟踪文件缺失", got)
+        except Exception as e:
+            ok = False
+            print("SELF-TEST FAIL(git): 调用异常", type(e).__name__, e)
     print("SELF-TEST:", "PASS" if ok else "FAIL")
     return 0 if ok else 1
+
+
+def collect_git(root, staged, changed):
+    """列出要检查的文件，返回项目根相对路径。
+
+    两条不能省的细节：
+    - cwd=root。git 输出按仓库根给路径，在子目录里跑也不能按当前目录解析。
+    - --changed 除 `git diff` 外还要 `ls-files --others --exclude-standard`。
+      只用 diff 看不到未跟踪的新文件，而新建代码文件正是门禁最该看见的一类。
+    - 分隔用 -z：路径含中文或空格时 git 会加引号转义，splitlines 会把它切碎。
+    """
+    import subprocess
+
+    def _git(*names):
+        r = subprocess.run(["git", *names], capture_output=True, check=True, cwd=root)
+        return [n for n in r.stdout.decode("utf-8", "replace").split("\0") if n.strip()]
+
+    out = []
+    if staged:
+        out += _git("diff", "--cached", "--name-only", "-z", "--diff-filter=ACMR")
+    if changed:
+        out += _git("diff", "--name-only", "-z")
+        out += _git("ls-files", "--others", "--exclude-standard", "-z")
+    return sorted(set(out))
 
 
 def main():
@@ -310,21 +408,8 @@ def main():
     approval = os.path.abspath(args.approval)
     root = os.path.dirname(approval)
     if args.staged or args.changed:
-        import subprocess
-        # -z 分隔：路径含中文或空格时 git 会加引号转义，splitlines 会把它切碎。
-        # cwd=root：git 输出是仓库根相对路径，在子目录里跑也不能按当前目录解析。
-        def _git(*names):
-            r = subprocess.run(["git", *names], capture_output=True, check=True, cwd=root)
-            return [n for n in r.stdout.decode("utf-8", "replace").split("\0") if n.strip()]
         try:
-            if args.staged:
-                targets += [os.path.join(root, n)
-                            for n in _git("diff", "--cached", "--name-only", "-z",
-                                          "--diff-filter=ACMR")]
-            if args.changed:
-                targets += [os.path.join(root, n) for n in
-                            _git("diff", "--name-only", "-z")
-                            + _git("ls-files", "--others", "--exclude-standard", "-z")]
+            targets += [os.path.join(root, n) for n in collect_git(root, args.staged, args.changed)]
         except Exception as e:
             print("用法错误: git 不可用:", e)
             return 2
@@ -334,6 +419,9 @@ def main():
     data, fatal = load_approval(approval)
     if fatal:
         print("REFUSE(全局):", fatal)
+    elif not data.get("expires_at"):
+        print("WARN: 准奏没有 expires_at，按长期有效处理。短任务建议填到期日，"
+              "否则方案早就换了的旧准奏会一直放行。")
     results = check_targets(data, root, targets)
     refused = 0
     for rel, allowed, reason in results:

@@ -32,6 +32,24 @@
 - SEC-2 有已知漏报（取舍，不是缺陷）：引号内的全大写串与纯数字口令不报——`DB_PASSWORD = "ABCDEFGH1234"`、`AWS_SECRET_KEY = "99999999"` 实测漏。收紧会把 `KEY_ENV = "AWS_SECRET_ACCESS_KEY"` 这类合法写法变成误报，而一票否决项的误报代价比漏报大。
 - 1a 是纯文字门禁：rbb 的机械校验跑在 N.E.K.O 宿主，Claude Code 与 Codex 里靠执行纪律。要接本地 checker，得先解决「第二份规则副本会各自漂移」。
 
+## 契约门禁体检（2026-11-15，issue #3）
+
+issue #3 的 `check_contract_approval.py` 三条具体缺陷，在 HEAD 上逐条实跑复现**不成立**——它们是针对旧提交 `1a2ac4f` 写的，早已修好；真正缺的是**没人守着**。本轮把三条钉进 `--self-test`，每条再做一次反向对照（把修复撤掉，确认自检报错）：
+
+| issue 条目 | HEAD 实测 | 钉住的测试 | 反向对照 |
+|---|---|---|---|
+| 目标按 cwd 解析、rel 按准奏目录算，子目录运行会误拒 | 不复现。在 `sub/` 里跑相对路径：`src/a.py` ALLOW，`sub/b.py` 因 scope 拒绝 | 子目录相对目标须解析成 `sub/nested.py` 并 ALLOW | 撤掉 `_git` 的 `cwd=root` → 报 `SELF-TEST FAIL(git)` |
+| `--changed` 漏未跟踪新文件 | 不复现。`git ls-files --others` 已并入，实测新建文件进名单 | 空仓库与有提交仓库两种状态都验 | 撤掉 `ls-files --others` → 两条 FAIL（名单少了新文件） |
+| 跨盘符 `relpath` 抛 ValueError 不 REFUSE | 不复现。异常被吞并转成「路径在项目根之外」，退出 1 | `Z:/` 根 + `C:/` 目标：Windows 走 ValueError 分支，Linux 走 `../` 分支，结论必须一致 | 撤掉 try/except → `ValueError: path is on mount 'C:', start on mount 'Z:'` 冒出来，自检抓到 |
+
+issue 里标「未核实」的一条也核了：`plan_sha256` **确实**被检查。填对摘要放行，改过 `PLAN.md` 后同一份准奏变成 `REFUSE …（plan_sha256 记录 310c3b1f…，实际 97141b78…）`；填了摘要没填 `plan_file` 也拒绝。
+
+同 issue 的其他条目，现状：`session_capability_refresh.py` 已改 `os.path.expanduser`（输出侧才脱敏，`replace('~/','~/')` 那种空操作已消失）；`generate_roster_tables.py` 的 `write()` 跟随目标文件原行尾；README 已称 profile 为**本地**权威并写明 ⓪ 陈旧门禁会降级；`neko-sources.md` 的工作坊条目已指向主仓 `fengdiehualian/neko-plugin-workshop`；profile §3/§7 于 2026-11-15 按 `acfbdbc50` 逐条重核。仍未动：`issued_by` 是自证字符串（要签名设施才能修），`.codebuddy-plugin/plugin.json` 清单缺项在工坊侧。
+
+本轮另加两处小改：缺 `expires_at` 时打一行 WARN（不改判定，长期有效的旧准奏仍放行，只是让人看得见）；README 里「基线 0984249」一句改成两个基线的分工说明。反向对照脚本 `pf-report/gate_negative_controls.py` 留在仓库外：它靠锚定被测源码的字面文本工作，进了仓库就会变成一条天天误报的脆检查。
+
+- **我自己的误判，记下来防复发**：写第一条测试时 `git diff` 退 129，我判成「空仓库（无提交）时 git diff 会失败」，并据此加了 `_has_head()` 分支走另一条名单。反向对照发现那个分支什么都测不到，回头实测：真·无提交仓库里 `git diff` 退 0、`ls-files --others` 正常列出文件，129 来自我的测试**忘了跑 `git init`**。分支已删除。教训：先复现故障再写修复；测试自己坏了也会长成产品缺陷的样子。
+
 ## 更正记录（2026-11-15）
 
 - 提交 `d42b092` 正文有一句被 shell 打断：「探针确认 52 条锚点全部仍对得 afterwards 上」，读作「…全部仍对得上」。同一条命令还把 CI 探针步骤的 `run:` 改坏过，那处在 `f000526` 已修并有实测输出。正文不改写：改它要 force-push 两个已推送的提交，一句措辞不值这个代价，以本条为准。
