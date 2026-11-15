@@ -33,7 +33,7 @@ Third-party attribution:
 - N.E.K.O is an Apache-2.0 project. This repository cites its routes, contracts and ports as
   verifiable facts and contains none of its source.
 - Process credit and external dependency (referenced, not vendored): 1-dcjiang/neko-reuse-before-build,
-  plugin id `reuse_before_build`, "先搜后建". Workflow A step 1a and SKILL.md 铁律 3 point at it as the
+  plugin id `reuse_before_build`, "先搜后建". Workflow A step 1a and SKILL.md 的「先搜后建」铁律 point at it as the
   authority for search-before-build rules. MIT License, (c) 2026 1-dcjiang. This repository writes its
   own prose and copies no rule text or code from it; it reuses only rbb's verdict vocabulary
   (Join / Extend / Fork / Build) and the deliverable marker `不可复用原因 / Not reusable because:` so that a
