@@ -33,7 +33,7 @@ gh api repos/Project-N-E-K-O/N.E.K.O/contents/scripts/custom_channels/neko_chann
 - N.E.K.O. = 桌面猫娘 AI 宿主；插件 = **独立 Python 进程**（独立进程天然隔离崩溃）。
 - 消息平面走 **ZMQ RPC**，默认 `tcp://127.0.0.1:38865`，可用 `NEKO_MESSAGE_PLANE_ZMQ_RPC_ENDPOINT` 改写
   `[FACT] plugin/settings.py:555-557`；另有 ZMQ event bridge 承载 events/lifecycle/runs（bridge queue `maxsize=4096`）
-  `[FACT] plugin/core/zmq_transport.py`、`plugin/settings.py:625`。
+  `[FACT] plugin/core/zmq_transport.py`、`plugin/settings.py:603（maxsize=4096 那句注释，读于 acfbdbc50，2026-11-15）`。
 - 对外 HTTP 面在插件服务器（见 §7）。`GET /health` 200 只证明**进程活着**，不证明插件被 autostart。
 - 安装形态：源码目录（开发模式）或 `.neko-plugin` 包上架市场 `[FACT] plugin/settings.py: get_builtin_plugin_config_root（69-71）与 get_user_plugin_exec_root（102-117，其中 legacy `PLUGIN_CONFIG_ROOT` 覆盖仍生效，见 105-108 的 docstring）；行号读于 acfbdbc50，2026-11-15`。
 
@@ -48,7 +48,7 @@ gh api repos/Project-N-E-K-O/N.E.K.O/contents/scripts/custom_channels/neko_chann
   `[FACT] plugin/neko_plugin_cli/commands/validate_cmd.py: _require_string 处 [plugin].entry 的 pattern（188）与 _check_entry_target 内 module / class 两处 re.fullmatch（916、919，读于 acfbdbc50，2026-11-15；旧记 181、760、763 处命中的不是这三条正则。宿主 schema.py:214 的 entry pattern 更宽（^[a-zA-Z0-9_.]+:[a-zA-Z0-9_]+$），发布以 CLI 校验为准）`。
 - `[plugin.sdk]` 兼容区间字段 `recommended` / `supported` 存在（可为空）`[FACT] plugin/config/schema.py: PluginSdkSchema.recommended / supported（71-72）与 PluginDependencySchema 同名字段（195-196），读于 acfbdbc50，2026-11-15`（`plugin/sdk` 兼容区间字段；GUIDE 已删除，旧锚全部作废）。
 - `[plugin_runtime]` 节：`enabled` / `auto_start`（**默认 `False`**）/ `timeout`（必须 `0 < t <= 300`）；
-  写成字符串布尔会被判为问题 `[FACT] plugin/config/schema.py: PluginRuntimeSchema（264-282 读于 acfbdbc50，2026-11-15；另有 priority、startup_failure 两字段，timeout 上限常量 _PLUGIN_RUNTIME_TIMEOUT_MAX = 300.0 在 :22）`、`plugin/config/plugin_toml_semantics.py:130-140`。
+  写成字符串布尔会被判为问题 `[FACT] plugin/config/schema.py: PluginRuntimeSchema（264-282 读于 acfbdbc50，2026-11-15；另有 priority、startup_failure 两字段，timeout 上限常量 _PLUGIN_RUNTIME_TIMEOUT_MAX = 300.0 在 :22）`、`plugin/config/plugin_toml_semantics.py:130-140（runtime_section 那段，读于 acfbdbc50，2026-11-15）`。
 - `id` 发布后不可改；改 id = 另一个插件身份，升级只换代码，保留 config/data/cache。
 
 ## 3. 入口与生命周期
@@ -65,7 +65,7 @@ gh api repos/Project-N-E-K-O/N.E.K.O/contents/scripts/custom_channels/neko_chann
   `[FACT] decorators.py: on_event 与 plugin_entry 签名的 kind 默认 "action"、custom_event 签名的 kind 默认 "custom"（裸行号 64、95、182 读于 acfbdbc50，2026-11-15；_PluginDecorators 另有私有镜像 263/302/391，纯 grep 会多命中）`。
 - 所有入口、生命周期、定时器、消息处理器**必须 `async def`**。
 - 一律从 `plugin.sdk.plugin` 导入；**`plugin.sdk.shared` 是内部实现细节，不应直接导入**（这句的出处是下一行引的 sdk 根 docstring；SKILL.md 只禁「新增」shared 导入，口径更窄）
-  `[FACT] plugin/sdk/__init__.py:9-10（docstring 原文：shared 是 internal implementation detail、should NOT be imported directly by plugin developers）；.agent/skills/neko-plugin/SKILL.md:18、69 与 docs/plugins/sdk-reference.md:29 口径较窄，前者只禁「新增」shared 导入，后者只谈受支持导入面（均读于 acfbdbc50，2026-11-15；旧 plugin/PLUGIN_DEVELOPMENT_GUIDE.md 已从 main 删除，全 profile 的 GUIDE: 速记失效）`（`plugin/sdk/shared/__init__.py` 1-5 行自述为 lower-level primitives，部分仍在演进；行号读于 acfbdbc50，2026-11-15）。
+  `[FACT] plugin/sdk/__init__.py:9-10（docstring 原文：shared 是 internal implementation detail、should NOT be imported directly by plugin developers）；.agent/skills/neko-plugin/SKILL.md:18（Prefer public SDK facades 那句，69 同文档）、docs/plugins/sdk-reference.md:29（supported developer import surface 那句）口径较窄，前者只禁「新增」shared 导入，后者只谈受支持导入面（均读于 acfbdbc50，2026-11-15；旧 plugin/PLUGIN_DEVELOPMENT_GUIDE.md 已从 main 删除，全 profile 的 GUIDE: 速记失效）`（`plugin/sdk/shared/__init__.py` 1-5 行自述为 lower-level primitives，部分仍在演进；行号读于 acfbdbc50，2026-11-15）。
 - ctx 侧：`push_message` `[FACT] plugin/core/context.py: push_message`（1050 行，pinned acfbdbc50，2026-11-15 实读；部分 v1 参数上游已标 deprecated）、`push_message_async` `[FACT] plugin/core/context.py: push_message_async`（1509 行，读于 acfbdbc50，2026-11-15；只是 `asyncio.to_thread` 包同步 `push_message`，不做参数翻译）、
   `export_push` / `export_push_async` 共支持 **五类** `export_type`：`text` / `json` / `url` / `binary` / `binary_url`，其余值抛 `ValueError`；`export_push_{text,binary,url,binary_url}` 各有 普通 / `_async` / `_sync` 三个包装，**`json` 没有包装**，只能 `export_push(export_type="json", json_data=...)`（要显式异步就同参换 `export_push_async`；包装只覆盖 text/binary/url/binary_url 四类）；内联 `binary` 受 `EXPORT_INLINE_BINARY_MAX_BYTES` 限制 `[FACT] plugin/core/context.py: _export_push_async 的 export_type 分支（737-756 行，pinned acfbdbc50，2026-11-15 实读）`；
   `run_id` 只有经 `/runs` 执行的入口才自动拿到：宿主从 `args._ctx["run_id"]` 注入运行域（`plugin/core/entry_executor.py: _run_scope(host_context.get("run_id"))`，130 行，读于 acfbdbc50，2026-11-15）。**需要** `run_id` 的只有 `ctx.export_push*` 与 run 状态/进度类（`run_update*` / `run_progress*`）：它们走 `require_run_id`，在 `/runs` 之外调用又没显式传 `run_id=` 才抛 `RuntimeError`；`push_message` / `push_message_async` **不需要** `run_id` `[FACT] plugin/core/context.py: require_run_id（637-641）、_export_push_async def 710 与调用 727、_run_update_async def 869 与调用 882；均读于 acfbdbc50，2026-11-15`。
@@ -100,13 +100,13 @@ gh api repos/Project-N-E-K-O/N.E.K.O/contents/scripts/custom_channels/neko_chann
 - `push_message` 单条 payload 默认 **512 KiB**，可经 `NEKO_MESSAGE_PLANE_PAYLOAD_MAX_BYTES` 调整；
   插件侧与宿主 ingest 共用同一常量（防止限制漂移）`[FACT] plugin/settings.py: MESSAGE_PLANE_PAYLOAD_MAX_BYTES 常量块`。大图先 `ctx.images.upload` 换 URL part。
 - **持久数据一律写 `data_path` / 缓存写 `cache_path`** `[FACT] docs/plugins/sdk-reference.md 持久数据表（78-79）与 data_path / cache_path 两节（132、141，读于 acfbdbc50，2026-11-15；GUIDE 已删除；本节其余锚点未标 sha，按文首基线声明沿旧基线）`；
-  `self.plugin_dir` 是随包安装目录（代码 / manifest / 静态资源）`[FACT] plugin/sdk/plugin/base.py: plugin_dir 定义（116-123，读于 acfbdbc50，2026-11-15）`、`docs/plugins/sdk-reference.md:48`（GUIDE 已删除，旧锚作废），
+  `self.plugin_dir` 是随包安装目录（代码 / manifest / 静态资源）`[FACT] plugin/sdk/plugin/base.py: plugin_dir 定义（116-123，读于 acfbdbc50，2026-11-15）`、`docs/plugins/sdk-reference.md:48`（plugin_dir 那行表格；GUIDE 已删除，旧锚作废），
   **不是可写区**。（`plugin_dir` 的强制只读由本机蒸馏文档 `neko-plugin-dev/reference/sdk-core.md:20、40` 断言，
   本轮未在上游逐行核到拦截点 → 该"强制层"记 `[未核验]`；但"往安装目录写"一律按平台约定封驳。）
 - **Windows 数据根取 `LOCALAPPDATA`**（不是 `HOME` / `USERPROFILE`）`[FACT] utils/config_manager/storage_roots.py:367-373`。
 - 用户插件执行根可被 `PLUGIN_CONFIG_ROOT` 覆盖（**宿主已标 legacy**：环境变量仍生效，新代码用 `PLUGIN_CONFIG_ROOTS` / `USER_PLUGIN_CONFIG_ROOT`；`plugin.settings` 的同名属性已废弃并返回内置根），否则 `<数据根>/N.E.K.O/.neko-plugin-installations/plugins`；内置根 = 仓库 `plugin/plugins`
   `[FACT] plugin/settings.py:69-71、105-116`。用户配置在 `<数据根>/plugins/<id>/config/plugin.toml`。
-- **插件启动超时 `NEKO_PLUGIN_STARTUP_TIMEOUT` 默认 `10.0` 秒，>300 直接 `ValueError`** `[FACT] plugin/settings.py:314-315、788-791`。
+- **插件启动超时 `NEKO_PLUGIN_STARTUP_TIMEOUT` 默认 `10.0` 秒，>300 直接 `ValueError`** `[FACT] plugin/settings.py:314-315（PLUGIN_STARTUP_TIMEOUT）、788-791`。
 - `@llm_tool` 的 `callback_url` 与 `/api/tools` **只接受 127.0.0.1**。
 - 外部文本不得拼进系统提示词；URL 拼接必须 `quote`。
 
@@ -203,7 +203,7 @@ gh api repos/Project-N-E-K-O/N.E.K.O/contents/scripts/custom_channels/neko_chann
   ① §4 新增「只读 OS 活动快照」支持项——旧版把桌面能力一刀切否掉，会**误封**只需"用户忙闲 / 前台类别 / idle 秒数"的方案；
   同时把"不支持"精确到**无鼠标/触摸事件推送**（`plugin/sdk` grep 零命中）。
   ② §3 补齐装饰器全集与 `@before/after/around/replace_entry` 拦截链、`@quick_action`（旧版只列 3 个入口，会漏判可实现性）；
-  补 `plugin.sdk.shared` 禁导入的上游出处（原 GUIDE:1717；GUIDE 已删除，现锚 `.agent/skills/neko-plugin/SKILL.md:18、69` 与 `docs/plugins/sdk-reference.md:29`，acfbdbc50）。
+  补 `plugin.sdk.shared` 禁导入的上游出处（原 GUIDE:1717；GUIDE 已删除，现锚 `.agent/skills/neko-plugin/SKILL.md:18（Prefer public SDK facades 那句）、69` 与 `docs/plugins/sdk-reference.md:29`（supported developer import surface 那句），acfbdbc50）。
   ③ §7 路由表按源码逐条带行号重写：`/runs` 语义由"只有 POST"精确化为"集合无 GET、单个 run 有 GET"；
   新增 `logs*` / `metrics` / `surfaces` / `hosted-ui/*` / `PUT .../auto-start` / start|stop|reload|refresh；
   并区分只读路由与变更路由（2026-11-15 修正：plugins.py 无 `mutation_router`，其变更路由靠 `require_admin` + `require_plugin_mutation_access`；`mutation_router` 在 runs / config / plugin_ui / model_config / plugin_install / plugin_cli / plugin_projects 七个文件，以 §7 为准）。

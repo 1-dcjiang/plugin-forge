@@ -162,7 +162,12 @@ def window_nums(seg):
 
 
 def collect(text):
-    """每个路径只看它自己之后、下一个路径之前的那段文字。"""
+    """每个路径只看它自己之后、下一个路径之前的那段文字。
+
+    段内没有标识符时不要退回整行。整行里有路径本身，`manifest.ts:129` 会抽出
+    `manifest`，而上游正文里几乎到处都写着 manifest。那种锚点自己命中自己，
+    代码搬走了也报「对得上」。这类锚点标 weak，交给 check 单独报「核不了」。
+    """
     anchors = []
     for no, line in enumerate(text.split(NL), 1):
         found = list(PATH_RE.finditer(line))
@@ -176,15 +181,13 @@ def collect(text):
                 continue
             toks = [x for x in IDENT_RE.findall(seg)
                     if x.lower() not in STOPWORDS and not re.fullmatch(r"[0-9a-fA-F]{7,}", x)]
-            if not toks:
-                toks = [x for x in IDENT_RE.findall(line)
-                        if x.lower() not in STOPWORDS and not re.fullmatch(r"[0-9a-fA-F]{7,}", x)]
             anchors.append({"line": no, "path": m.group(1), "nums": nums[:10],
                             "tokens": list(dict.fromkeys(toks))[:6],
+                            "weak": not toks,
                             "text": line.strip()[:120]})
     seen, uniq = set(), []
     for an in anchors:
-        k = (an["path"], tuple(an["nums"]))
+        k = (an["path"], tuple(an["nums"]), an["weak"])
         if k not in seen:
             seen.add(k)
             uniq.append(an)
@@ -192,11 +195,21 @@ def collect(text):
 
 
 def enclosing(lines, token, n):
-    """记录行是否落在该标识符的定义域内。装饰器行不含函数名、区间落在函数体内，都属正常。"""
+    """记录行是否落在该标识符的定义域内。装饰器行不含函数名、区间落在函数体内，都属正常。
+
+    第一版只认 Python 的 def/class 与 Field/Literal 赋值。TS 与 JS 文件里的锚点
+    因此永远进不了定义体判定：函数搬走、改名，探针仍说对得上。这里补 TS/JS 的
+    顶层定义形状，同时保留 Python 那两条。
+    """
     starts = [i for i, ln in enumerate(lines, 1) if token in ln]
     if not starts:
         return False
-    top = re.compile(r"^(?:async\s+)?(?:def|class)\s+\w|^\w.*=\s*(?:Field|Literal)\b")
+    top = re.compile(r"^(?:async\s+)?(?:def|class)\s+\w|^\w.*=\s*(?:Field|Literal)\b"
+                     r"|^(?:export\s+)?(?:default\s+)?(?:async\s+)?"
+                     r"(?:function|class|interface|type|enum|namespace|module|abstract\s+class)\s+\w"
+                     r"|^(?:export\s+)?(?:const|let|var)\s+\w"
+                     r"|^\w[\w$]*\s*\(.*\)\s*\{\s*$"
+                     r"|^\w[\w$]*\s*(?:\([^)]*\))?\s*[:=]\s*(?:async\s*)?\(")
     for s in starts:
         if s > n:
             continue
@@ -211,9 +224,10 @@ def enclosing(lines, token, n):
 
 
 def check(anchors, head):
-    """逐条核对锚点。状态四种：ok 对得上，drift 行号漂了，gone 上游 404（真结论），
-    unreachable 取不到（限流或断网，不是结论）。把 gone 与 unreachable 混在一起，
-    一次限流就会被读成「上游把文件删了」。"""
+    """逐条核对锚点。状态五种：ok 对得上，drift 行号漂了，gone 上游 404（真结论），
+    unreachable 取不到（限流或断网，不是结论），weak 这句话没有符号可比对（探针管不了，
+    也不算核过）。把 gone 与 unreachable 混在一起，一次限流就会被读成「上游把文件删了」。
+    把 weak 算成 ok，就回到旧版的假绿：锚点只写了路径与行号时，谁都没在核它。"""
     file_cache, rows = {}, []
     for an in anchors:
         path = an["path"]
@@ -227,6 +241,11 @@ def check(anchors, head):
             why = {"limited": "限流（403/429），带 GITHUB_TOKEN 再跑",
                    "big": "文件超过 contents API 的正文上限（1MB），需改用 git blob API 才能核"}.get(err, "传输失败（超时或断网）")
             rows.append(dict(an, status="unreachable", detail=why))
+            continue
+        if an.get("weak"):
+            rows.append(dict(an, status="weak",
+                             detail="这句话只有路径与行号，没有可比对的符号。上游怎么改都验不出来，"
+                                    "请在 profile 里补一个符号名（函数、字段或类）"))
             continue
         drift, present = [], []
         for n in an["nums"]:
@@ -251,7 +270,15 @@ def check(anchors, head):
 
 
 def self_test():
-    """钉住两处真出过错的形状：状态分类，以及从一句话里抓行号。"""
+    """钉住两处真出过错的形状：状态分类，以及从一句话里抓行号。
+
+    2026-11-15 又钉两处假绿：段内没有符号时退回整行拿路径片段当 token，
+    以及 enclosing 只认 Python 定义形状。这两种都会让「代码已搬走」读成「仍对得上」。
+    """
+    def anchor(text):
+        got = collect(text)
+        return got[0] if got else {}
+
     cases = [
         (classify(404), "missing"), (classify(403), "limited"), (classify(429), "limited"),
         (classify(500), "net"), (classify(301), "net"),
@@ -263,6 +290,23 @@ def self_test():
         (window_nums("issue #3683 §4.2 自查 5、6、8"), []),
         (window_nums("（id 212、name 213）"), [212, 213]),
         (window_nums("覆盖率 95%"), []),
+        # 只有路径与行号的一句话：标 weak，token 必须为空（不许拿路径片段凑）
+        (anchor("见 plugin/app/x.ts:129 那一处。").get("weak"), True),
+        (anchor("见 plugin/app/x.ts:129 那一处。").get("tokens"), []),
+        # 句子里有符号就不 weak
+        (anchor("plugin/app/x.py:12 里是 handler 函数").get("weak"), False),
+        (anchor("plugin/app/x.py:12 里是 handler 函数").get("tokens"), ["handler"]),
+        # enclosing 认 TS/JS 顶层定义：下一个定义把作用域关掉时，记录行不算在域内。
+        # 这一条是真的对照：只认 Python 形状时，第 4 行的 export const 不算边界，会错判 True。
+        (enclosing(["function handler() {", "  return 1", "}",
+                    "export const WORLD = {", "  k: 1"], "handler", 5), False),
+        # Python 的 def 边界照旧算边界
+        (enclosing(["def handler():", "    return 1", "def other():", "    pass"],
+                   "handler", 4), False),
+        # 同一个函数体内部的行算在域内（装饰器与区间锚属这种）
+        (enclosing(["def handler():", "    x = 1", "    return x"], "handler", 3), True),
+        (enclosing(["export class Panel extends Base {", "  onMount() {", "    const x = 1"],
+                   "Panel", 3), True),
     ]
     bad = [(i, got, want) for i, (got, want) in enumerate(cases) if got != want]
     for i, got, want in bad:
@@ -302,24 +346,31 @@ def main():
 
     rows = check(anchors, head)
     unreachable = [r for r in rows if r["status"] == "unreachable"]
+    weak = [r for r in rows if r["status"] == "weak"]
     drift = [r for r in rows if r["status"] in ("drift", "gone")]
+    ok = len(rows) - len(drift) - len(unreachable) - len(weak)
     if a.json:
         print(json.dumps({"upstream": UPSTREAM, "head": head, "head_from_cache": from_cache,
-                          "anchors": len(rows), "ok": len(rows) - len(drift) - len(unreachable),
-                          "unreachable": len(unreachable), "drift": drift},
+                          "anchors": len(rows), "ok": ok, "weak": len(weak),
+                          "unreachable": len(unreachable), "drift": drift,
+                          "weak_rows": [{"line": r["line"], "path": r["path"],
+                                         "nums": r["nums"]} for r in weak]},
                          ensure_ascii=False, indent=1))
     else:
         print("上游 %s，当前 main = %s%s" % (UPSTREAM, head[:9],
               "（取自 %d 小时内的缓存，--fresh 可强制重取）" % (HEAD_TTL // 3600) if from_cache else ""))
-        print("锚点核对 %d 条：对得上 %d，漂移 %d，取不到 %d"
-              % (len(rows), len(rows) - len(drift) - len(unreachable), len(drift), len(unreachable)))
-        for r in (drift + unreachable)[:30]:
+        print("锚点核对 %d 条：对得上 %d，漂移 %d，核不了 %d，取不到 %d"
+              % (len(rows), ok, len(drift), len(weak), len(unreachable)))
+        for r in (drift + unreachable + weak)[:30]:
             print("  [%s] profile 第 %d 行  %s  记录号 %s\n        %s"
                   % (r["status"], r["line"], r["path"], "/".join(map(str, r["nums"][:6])), r["detail"]))
-        if len(drift) + len(unreachable) > 30:
-            print("  ...其余 %d 条用 --json 查看" % (len(drift) + len(unreachable) - 30))
+        if len(drift) + len(unreachable) + len(weak) > 30:
+            print("  ...其余 %d 条用 --json 查看" % (len(drift) + len(unreachable) + len(weak) - 30))
         if unreachable:
             print("结论：%d 条锚点本次无法判定（取不到上游，不算漂移）。" % len(unreachable))
+        elif weak:
+            print("结论：%d 条锚点没有可比对的符号，只有路径与行号，这几条不算核过。"
+                  "把符号名补进 profile 那句里，探针才管得住它。" % len(weak))
         else:
             print("结论：" + ("全部锚点在当前 main 上仍对得上。" if not drift else
                             "行号已漂。按 detail 更新行号，或把锚点降成「只写标识符 + 读于 <sha>」。"))
