@@ -457,15 +457,25 @@ def cmd_plugin_rm(args):
 
 # 宿主环境里的凭据不该进被测第三方插件的进程。按名字形状删，不按名字白名单加：
 # 缺一个必需变量会让沙箱以一个看不出关联的错误崩掉，而漏删只影响纵深防御的一层。
-# 不删 AUTH 形状的名字：SSH_AUTH_SOCK 会命中它，靠 git over SSH 的插件会丢掉 agent。
+# 2026-11-15 扩充：COOKIE / AUTH / SESSION / BEARER / JWT / DSN / SSHKEY / LICEN[CS]E 这类名字以前会被放过。
+# 代价是 SSH_AUTH_SOCK 会被命中，所以把它写进 KEEP_EXACT 显式保留，靠 git over SSH 的插件不受影响。
+# 按词边界判，所以 LICENSES、LICENSING 不被删；粘连写法（MYLICENCE）也不删，那是已知残留。
+# 注意 SESSION 一类会被剔掉：插件若靠 SESSION_ID / WT_SESSION 做会话关联，在沙箱里读不到，
+# 要关联就把值当参数显式传，别依赖环境继承。
 SECRET_ENV_RE = re.compile(
-    r"(?i)(^|_)(TOKEN|SECRET|PASSWORD|PASSWD|PASS|PWD|KEY|APIKEY|CREDENTIAL|CREDENTIALS)($|_)")
+    r"(?i)(^|_)(TOKEN|SECRET|PASSWORD|PASSWD|PASS|PWD|KEY|APIKEY|CREDENTIAL|CREDENTIALS"
+    r"|COOKIE|AUTH|AUTHORIZATION|SESSION|BEARER|JWT|DSN|SSHKEY|KEYCHAIN|LICEN[CS]E)($|_)")
 # PWD 单独放行：shell 的当前目录变量，删了会让插件里的相对路径调试摸不着头脑。
 # 但 MYSQL_PWD / DB_PWD 这类「前缀 + PWD」是真口令，照删。
-KEEP_EXACT = {"PWD"}
-# 上面按分隔符切词，会漏两种真实写法：PGPASSWORD（没有分隔符）和 DATABASE_URL（口令在值里）。
-SECRET_ENV_SUB = ("PASSWORD", "PASSWD", "SECRET", "TOKEN", "CREDENTIAL", "APIKEY")
+# SSH_AUTH_SOCK 是 ssh-agent 的 socket 路径，不是口令本身；删了 git+ssh 就找不到 agent。
+KEEP_EXACT = {"PWD", "SSH_AUTH_SOCK"}
+# 上面按分隔符切词，会漏两类真实写法：粘连名（PGPASSWORD、MYCOOKIE）与口令在值里（DATABASE_URL）。
+SECRET_ENV_SUB = ("PASSWORD", "PASSWD", "SECRET", "TOKEN", "CREDENTIAL", "APIKEY",
+                  "COOKIE", "BEARER", "JWT", "SSHKEY", "KEYCHAIN")
 URL_CRED_RE = re.compile(r"://[^/\s:@]*:(?![\"\'<$])([^\s@\"\'<>{}$]{8,})@")
+# 连接串不一定长成 URL：`Server=x;Password=...` 这种也得删。值里只认标记名，不认短占位串。
+CONN_SECRET_RE = re.compile(
+    r"(?i)(password|passwd|pwd|secret|token|accesstoken|apikey)\s*[=:]\s*(?![\"\'<$])([^\s;,\"']{6,})")
 
 
 def env_is_secret(name, value):
@@ -477,7 +487,8 @@ def env_is_secret(name, value):
         return True
     if any(s in n for s in SECRET_ENV_SUB):
         return True
-    return bool(URL_CRED_RE.search(value or ""))
+    v = value or ""
+    return bool(URL_CRED_RE.search(v) or CONN_SECRET_RE.search(v))
 
 
 def _server_env(root, args):
@@ -775,12 +786,20 @@ def _self_test():
     """环境变量过滤、插件 id 校验与安装形态判断的回归自检（CI 跑，见 sync-check.yml）。"""
     keep = ["PATH", "SYSTEMROOT", "HOME", "LOCALAPPDATA", "APPDATA", "TEMP", "COMSPEC",
             "SSH_AUTH_SOCK", "GIT_SSL_CAINFO", "PYTHONUTF8", "NEKO_USER_PLUGIN_SERVER_PORT",
-            "NEKO_PLUGIN_STARTUP_TIMEOUT", "PWD"]
+            "NEKO_PLUGIN_STARTUP_TIMEOUT", "PWD", "SESSIONNAME", "OAUTH_SCOPE", "AUTHOR_NAME",
+            "CONNECTION_POOL", "LICENSES", "LICENSING"]
     drop = ["MYSQL_PWD", "DB_PWD", "GITHUB_TOKEN", "ANTHROPIC_API_KEY",
             "AWS_SECRET_ACCESS_KEY", "OPENAI_APIKEY",
             "MY_SECRET", "SESSION_TOKEN_X", "DB_PASS", "PGPASSWORD", "ADMIN_PASSWORD",
-            "DATABASE_URL", "db_credential"]
-    vals = {"DATABASE_URL": "postgres://u:sup3rs3cr3tpw@db/x", "db_credential": "x"}
+            "DATABASE_URL", "db_credential",
+            # 2026-11-15 补：这些名字以前会被放过（外部审 A472 之后的讨论）
+            "COOKIE", "SESSION_COOKIE", "AUTH", "AUTHORIZATION", "SESSION_ID", "WT_SESSION",
+            "BEARER", "JWT", "MYCOOKIE", "SSHKEY", "KEYCHAIN_PASSWORD", "CONN_STR", "REDIS_URL",
+            "LICENCE", "LICENSE", "OPEN_LICENSE_DIR"]
+    vals = {"DATABASE_URL": "postgres://u:sup3rs3cr3tpw@db/x", "db_credential": "x",
+            "CONN_STR": "Server=db.internal;Password=Sup3rS3cret!;Database=app",
+            "REDIS_URL": "redis://:r3d1spassw0rd@cache:6379/0",
+            "AUTH": "Basic YWxpZGVjOjEyMzQ1Njc4", "SESSION_ID": "abcd1234efgh5678ijkl"}
     bad = []
     for k in keep:
         if env_is_secret(k, vals.get(k, "")):

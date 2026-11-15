@@ -67,6 +67,29 @@ issue 里标「未核实」的一条也核了：`plan_sha256` **确实**被检�
 | 追加发现 A（反向对照抓出来的） | **CI 的「Sandbox self-test」这一步永远不会红**。入口写的是 `if __name__ == "__main__": main()`，`main()` 把 `--self-test` 的返回码丢掉，所以自检打印 FAIL 也退 0。已改成只把整数当退出码（命令路径的 `cmd_*` 返回值不算失败码）。反向对照：撤掉 `classify_plugin_path` 的软链优先判断 → 自检打印 FAIL 且退 1 |
 | 追加发现 B | 自检的临时 git 仓库删不掉，本机攒了 15 个 `forge-gate-git-*`。原因：Windows 上 git 把对象文件写成只读，`unlink` 报 WinError 5，而 `shutil.rmtree(..., ignore_errors=True)` 把失败吞了；`onerror` 参数自 Python 3.12 起弃用（文档写 3.14 换成 `onexc`），但本机 3.15.2 实测它仍被接受、也不告警，所以参数名不是第一版失败的原因：真正的错在我那个处理函数只 chmod、没有重试失败的操作。已加 `_rm_tree()`：`onexc` 里 chmod 后重试，并兼容只有 `onerror` 的旧版本。清理失败只打 WARN，不判失败（防软可能临时锁住对象文件） |
 
+### 追加：沙箱环境变量过滤的名字缺口（2026-11-15，由 sabotage 讨论引出）
+
+反向对照那次 sabotage 用 `NOT_A_SECRET_XYZ` 想让自检失败，结果它反而被当成凭据——过滤器是**按字样**判的。
+顺着这条实测出缺口：`COOKIE`、`AUTH`、`AUTHORIZATION`、`SESSION`、`SESSION_ID`、`BEARER`、`JWT`、
+`DSN`、`SSHKEY`、`CONN_STR` 这 16 个名字当时会直接漏进沙箱（`DATABASE_URL`、`PASSWD` 其实已被值规则
+和子串规则接住，那两个例子是误报的误报）。
+
+处理：`SECRET_ENV_RE` 加 COOKIE/AUTH/AUTHORIZATION/SESSION/BEARER/JWT/DSN/SSHKEY/KEYCHAIN；
+`SECRET_ENV_SUB` 加粘连写法 COOKIE/BEARER/JWT/SSHKEY/KEYCHAIN；新增 `CONN_SECRET_RE` 接
+`Password=...` 这类非 URL 连接串。代价是 `SSH_AUTH_SOCK` 会被命中，所以写进 `KEEP_EXACT` 显式保留
+（它不是口令，删了 git over SSH 就找不到 agent）。`SESSIONNAME`、`OAUTH_SCOPE`、`AUTHOR_NAME` 这类
+按边界规则仍被保留。本机实测多删的是 `CLAUDE_CODE_SESSION_ID` / `WT_SESSION` 这一类会话号，
+N.E.K.O 服务与 git/uv/pip 都不读它们。自检名单扩到 56 项。反向对照：撤掉名字扩充 → 4 条断言报错、退 1。
+
+边界规则不误伤 `LICENSES`、`LICENSING`、`OAUTH_SCOPE`、`AUTHOR_NAME`、`SESSIONNAME`；`LICENCE` 与
+`LICENSE` 两种拼写都按名字剔掉（实测 `OPEN_LICENSE_DIR` 也剔）。
+
+**SESSION 一类会被剔掉。** 插件若靠 `SESSION_ID`、`WT_SESSION` 这类变量做会话关联，在沙箱里读不到——
+本机实测新剔的就是 4 个会话号。要关联就把值当参数显式传给插件，别依赖环境继承。这句同样写在
+`sandbox.py` 的注释里，两处都有记录。
+
+已知残留：粘连写法（`MYLICENCE`）不删；值里是短占位串（`<token>`、`$VAR`）时不判，避免把模板当凭据。
+
 ## 外部深审 edc862d 的复核（2026-11-15，报告 A464）
 
 报告给 8.3/10，列 14 条。逐条核完：13 条属实，1 条部分属实。这一轮暴露的不是代码问题，是**我把计划写成了结果**：提交 `69cde01` 的正文与 `AUDIT.md` 都写「新增两条规则形状：离线降级…与快速档」，实际手册里只有快速档。是外部审查看出来的，我自己的检查没看出来。已补条文（`references/workflows.md` 1a 节、SKILL 铁律 3、market-research 本职 4、codex 提示词第 1a 步），提交历史按既有口径不改，以本节为准。
