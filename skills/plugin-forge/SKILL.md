@@ -7,7 +7,7 @@ description: |
   publish a plugin or extension for ANY host platform, asks about manifest / entry /
   lifecycle / SDK capability limits, wants an ecosystem or market gap analysis for a
   plugin platform, or says 插件制造专家团 / plugin-forge / 写个插件 / 做个扩展.
-  契约先行（方案未过审议不许写码）+ TDD + 极简工程 + 安全门禁 + 运行时验证。
+  契约先行（方案未过审议不许写码）+ 先搜后建（rbb 门禁）+ TDD + 极简工程 + 安全门禁 + 运行时验证。
   交付前 D1–D12 自检闸门（反缓干、反伪阻断，见 references/delivery-self-check.md）。
   文档工程师内置双风格门禁（ASD-STE100 + humanizer，中英同等），外部内容入库先审计。
   兼管宿主破坏性变更影响审计（RFC/changelog/升级：插件机队体检与上游回帖礼仪）。
@@ -54,7 +54,7 @@ metadata:
 | plugin-forge-skill-ops | 能力运营师 | 需要新 skill / 审计第三方能力 |
 | plugin-forge-reliability | 运维可靠性工程师 | CI/CD、发布就绪、故障响应 |
 | plugin-forge-security | 安全工程师 | 交付前安全门禁（密钥 / 注入 / 依赖） |
-| plugin-forge-market-research | 生态调研分析师 | 生态 / 市场缺口分析 |
+| plugin-forge-market-research | 生态调研分析师 | 生态 / 市场缺口分析；Workflow A 第 1a 步（先搜后建，rbb 门禁） |
 | plugin-forge-sandbox | 运行时验证工程师 | "宿主里到底跑不跑" / 交付前真实冒烟 |
 | plugin-forge-docs | 文档工程师 | 工作流 G 主力：README / 教程 / 变更说明 / PR 文本 / 对外沟通；风格门禁见 `references/style-anti-slop.md`；外部内容入库审计 |
 <!-- END roster:skill -->
@@ -63,14 +63,14 @@ metadata:
 
 1. **契约前置**：Workflow A 的契约审议不可跳步。没有契约审议师准奏，不许动手写码。准奏须落盘项目根 `contract-approval.json`（格式 `references/contract-approval.schema.json`，示例见 `.example.json`）；写码前跑 `python ${FORGE_HOME}/scripts/check_contract_approval.py --approval <项目根>/contract-approval.json <要写的文件…>`，脚本 REFUSE 即不许动笔。
 2. **封驳必须给改法**：只否定不给路径算失职；连续 2 次封驳升级用户裁决。
-3. **先搜后建**：写任何新代码前先过 rbb 门禁——三轮检索后必须给出「加入上游 / 复用现成 / 自建（附不可复用的具体理由）」三选一结论。权威本体是上游插件 `reuse_before_build`（1-dcjiang，MIT，v0.3.12 / 4a14fbd，2026-11-15 核对），本团只引用不内嵌。详见 `references/workflows.md` 的 Workflow A 第 1a 步。
+3. **先搜后建**：写任何新代码前先过 rbb 门禁。三轮检索后必须给判决，四档取一：加入上游（Join）/ 做官方扩展（Extend）/ 分叉并保持同步（Fork）/ 自建（Build，附**不可复用的具体理由**）。判定先过可改性硬闸：绿才 Join，黄只 Extend，红禁止 Join。小改动走 rbb 快速档：3 条检索串加三行 Reused / Change / Risk，但「有没有人做过」这一问不豁免。权威本体是上游插件 `reuse_before_build`（1-dcjiang，MIT，v0.3.12 / 4a14fbd，2026-11-15 核对），本团只引用不内嵌。详见 `references/workflows.md` 的 Workflow A 第 1a 步。
 4. **分拣**：纯问答（"X 是什么""怎么装"）主理人直接答，不开团队流程。
 
 ## 3. 工作流选择
 
 | 用户要做 | 工作流 |
 |---|---|
-| 从零做插件 / 加功能 | A 完整七步（分拣→方案→契约审议→派发→实现→运行时验证→验收） |
+| 从零做插件 / 加功能 | A 完整七步（分拣→1a 先搜后建（rbb 门禁）→方案→契约审议→派发→实现→运行时验证→验收） |
 | 修跑不起来的 | B 单成员直调（dev / sandbox） |
 | 极简重构 | C |
 | 沉淀 / 审计 skill | D |

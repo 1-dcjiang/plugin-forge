@@ -1,7 +1,7 @@
 {
   "schema": "plugin-forge/roster@1",
   "source_of_truth": "本文件是团队名册与成员表的唯一来源；README、SKILL.md、lead 文档中的名册表格和人数声明由 scripts/generate_roster_tables.py 从本文件生成，不得手改。",
-  "updated": "2026-11-14",
+  "updated": "2026-11-15",
   "members": [
     {
       "agent_id": "plugin-forge-lead",
@@ -132,7 +132,7 @@
       "name_en": "Ecosystem Research Analyst",
       "profession_zh": "生态调研分析师",
       "duty": "平台生态调研、缺口分析",
-      "when_to_dispatch": "生态 / 市场缺口分析",
+      "when_to_dispatch": "生态 / 市场缺口分析；Workflow A 第 1a 步（先搜后建，rbb 门禁）",
       "max_turns": 60
     },
     {

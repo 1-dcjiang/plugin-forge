@@ -166,6 +166,12 @@ MANIFEST_NAMES = {"plugin.toml", "pyproject.toml", "package.json", "setup.py",
 # 与真盲区（该读却没读到：超大、二进制、读失败、疑似压缩）。只有后者能触发退出码 3，
 # 否则任何有 .git 或 README 的仓库都会恒为「不确定」。
 BY_DESIGN_KEYS = ("构建/缓存/VCS 目录", "不在扫描池", "--allow 豁免")
+# 密钥材料文件：内容不读（里面本来就该是私钥，把明文再抄进报告是第二次泄露）。
+# 但它不能记成「设计内排除」：一个把 id_rsa 提交进仓库的项目，在盲区账上必须看得见。
+# 旧版只按扩展名过滤，.pem 落进「不在扫描池」，于是满是私钥的仓库照样报「真盲区 0」。
+SECRET_FILE_EXTS = {".pem", ".key", ".pfx", ".p12", ".kdbx", ".ppk", ".jks", ".keystore"}
+SECRET_FILE_NAMES = {".netrc", "_netrc", ".npmrc", ".pypirc",
+                     "id_rsa", "id_dsa", "id_ecdsa", "id_ed25519"}
 
 
 def blind_kind(entry):
@@ -255,6 +261,10 @@ def iter_files(root, include_docs, allow, skips=None):
             # 无扩展名文件（Dockerfile / Makefile / 无后缀脚本）和 .env* 也进池：明文密钥最常
             # 落在这两类里，旧版只按扩展名过滤，等于对它们失明。
             low = fn.lower()
+            # 密钥材料：不读内容，但要记在真盲区那本账上，所以措辞里不能出现 BY_DESIGN_KEYS 的词。
+            if ext in SECRET_FILE_EXTS or low in SECRET_FILE_NAMES:
+                skips.append(rel + "（密钥材料文件 " + (ext or low) + "，内容不读）")
+                continue
             # 清单文件无条件进池：requirements.txt 属 DOC_EXTS，不加 --include-docs 就读不到，
             # 而 git+ 直连依赖最常写在这个文件里。
             if (ext and ext not in pool and fn not in MANIFEST_NAMES
@@ -442,6 +452,10 @@ def _self_test():
         helper_bad.append("构建目录应算设计内排除")
     if blind_kind("big.json（超过 2 MiB，未读）") != "unread":
         helper_bad.append("超大文件应算真盲区")
+    if blind_kind("srv.pem（密钥材料文件 .pem，内容不读）") != "unread":
+        helper_bad.append("密钥材料文件必须算真盲区，不能算设计内排除")
+    if ".pem" in CODE_EXTS | CONFIG_EXTS | DOC_EXTS:
+        helper_bad.append(".pem 不该进可读池：里面的私钥会被抄进报告")
     if len(manifest_gaps("package.json", '{"name":"x"}')) < 2:
         helper_bad.append("package.json 缺 license/repository 没报出来")
     # plugin.toml 必填要按节判定：子段里的同名键不能顶掉顶层缺项

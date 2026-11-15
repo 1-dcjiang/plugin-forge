@@ -21,6 +21,7 @@ jobs:
           python -m py_compile skills/plugin-forge/scripts/security_audit.py
           python -m py_compile skills/neko-plugin-sandbox/scripts/sandbox.py
           python -m py_compile scripts/session_capability_refresh.py
+          python -m py_compile scripts/profile_drift.py
       - name: Roster generator self-test
         run: python scripts/generate_roster_tables.py --self-test
       - name: Roster tables and head-counts in sync
@@ -31,6 +32,8 @@ jobs:
         run: python skills/plugin-forge/scripts/security_audit.py --self-test
       - name: Sandbox self-test
         run: python skills/neko-plugin-sandbox/scripts/sandbox.py --self-test
+      - name: Drift probe self-test
+        run: python scripts/profile_drift.py --self-test
       - name: 对本仓库跑一次真实安全扫描
         env:
           AUDIT_ALLOW: skills/plugin-forge/scripts/security_audit.py,skills/neko-plugin-sandbox/scripts/sandbox.py,scripts/profile_drift.py
@@ -44,6 +47,8 @@ jobs:
           python skills/plugin-forge/scripts/security_audit.py . --allow "$AUDIT_ALLOW" --strict-placeholder || true
       - name: 'Report only: profile 锚点漂移探针（不阻塞）'
         continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: python scripts/profile_drift.py --strict
       - name: JSON artifacts parse
         run: python -c "import json,glob;fs=glob.glob('**/*.json',recursive=True)+glob.glob('.claude-plugin/*.json');[json.load(open(p,encoding='utf-8-sig')) for p in fs]"

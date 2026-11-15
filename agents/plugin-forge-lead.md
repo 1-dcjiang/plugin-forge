@@ -34,7 +34,7 @@ maxTurns: 180
 
 | 用户要做 | 路由 |
 |---|---|
-| 从零做插件 / 加功能 | Workflow A 七步：分拣 → **先搜后建（market-research，rbb 门禁）** → 方案（planner/architect）→ **契约审议（contract，门禁）** → 派发 → 实现（tdd→dev，architect/simplifier 并行）→ 运行时验证（sandbox + reliability）→ 验收汇编 |
+| 从零做插件 / 加功能 | Workflow A 七步：分拣 → **先搜后建（1a，market-research，rbb 门禁）** → 方案（planner/architect）→ **契约审议（contract，门禁）** → 派发 → 实现（tdd→dev，architect/simplifier 并行）→ 运行时验证（sandbox + reliability）→ 验收汇编 |
 | 修跑不起来的 | Workflow B 单成员直调 dev（必要时 sandbox 复现），注明「单成员直调」 |
 | 极简重构 | Workflow C：simplifier → architect → reviewer → 我汇总 |
 | 沉淀/审计 skill | Workflow D：skill-ops 主导 |
@@ -50,7 +50,7 @@ maxTurns: 180
 
 ## 契约门禁（我最要守的一条）
 
-- Workflow A 第 1a 步**不可跳**：rbb 三轮检索结论没出来，不派 planner/architect 取证与起草。
+- Workflow A 第 1a 步**不可跳**：1a 的检索判决（四档，形状见 `references/workflows.md` 1a 节）没出来，不派 planner/architect 起草方案。
 - Workflow A 第 3 步**不可跳**：没有 contract 准奏，不许派 dev 写码。
 - 封驳 → 只改被驳部分重新送审；连续 2 次封驳升级用户裁决（降范围 / 换方案 / 放弃）。
 - 我不替 contract 做审议结论，也不替成员做专业产出。

@@ -16,8 +16,12 @@
 
 缓存
   拉到的上游文件放在 scripts/.drift-cache/（已加进 .gitignore），避免一次跑打上百次 API。
+  当前 main 的 sha 也存那里，超过 24 小时自动重取，否则「当前 main」这句话站不住。
 
-退出码：0 报告完成；--strict 且有漂移时 1；取不到上游时 2。
+匿名限额是一小时 60 次。CI 里给这一步传 GITHUB_TOKEN，否则跑不了几条就限流。
+限流与断网不算漂移：那些锚点报 unreachable，脚本退 2，不冒充「上游删了文件」的结论。
+
+退出码：0 报告完成；--strict 且有漂移时 1；有锚点取不到上游时 2（包括根本取不到 sha）。
 """
 import argparse
 import base64
@@ -30,24 +34,46 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
 DEFAULT_PROFILE = os.path.join(REPO, "skills", "plugin-forge", "references", "profile-neko.md")
 CACHE_DIR = os.path.join(HERE, ".drift-cache")
+HEAD_TTL = 24 * 3600
 UPSTREAM = "Project-N-E-K-O/N.E.K.O"
 NL = chr(10)
 
 PATH_RE = re.compile(r"(?<![\w/.\-])((?:plugin|app|config|docs|nekoclaw|memory|launcher_core|"
                      r"main_logic|\.agent)/[\w./\-]*\.(?:py|md|toml|json|js|ts))")
 IDENT_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]{3,}")
-# 只认这三种形状：NNN 行、:NNN、（NNN 或（NNN/NNN。issue 号带 #、章节号带 §，都不会被吃进来。
+# 认这四种形状：NNN 行、:NNN、（NNN 或（NNN/NNN、带标签的「id 212、name 213」。
+# issue 号带 #、章节号带 §，都不会被吃进来。第四种必须跟在短标签后并以顿号或括号收尾，
+# 否则「见 4.2 与自查 5、6、8」这种句子编号会被当成行号——第一版探针就在这里报了 8 条假漂移。
 NUM_PATTERNS = (re.compile(r"(?<![\w.\-])(\d{1,5})(?=\s*行)"),
                 re.compile(r":(\d{1,5})(?![\d%])"),
-                re.compile(r"[（(]\s*(\d{1,5}(?:\s*[/、,]\s*\d{1,5})*)"))
+                re.compile(r"[（(]\s*(\d{1,5}(?:\s*[/、,]\s*\d{1,5})*)"),
+                re.compile(r"(?<=[A-Za-z_] )(\d{1,5})(?=[、，,)）])"))
 STOPWORDS = {"plugin", "read", "line", "sha", "fact", "def", "main", "code", "true", "false",
              "none", "str", "int", "bool", "list", "dict", "self", "return", "import", "from",
              "https", "http", "www", "md", "py", "toml", "json", "get", "post", "put", "delete",
              "api", "ctx", "sdk", "app", "pinned", "readme", "guide", "this", "that", "with"}
 
 
+def classify(status):
+    """把 HTTP 状态分成三类，因为它们的含义完全不同。
+
+    missing  = 404，上游真的没有这个文件，这是有效结论（算漂移）。
+    limited  = 403 / 429，匿名限额一小时 60 次，这不是结论。
+    net      = 其他状态、超时、断连，同样不是结论。
+    旧版把三者一律压成 None，限流就被报成「上游取不到该文件」，读起来像上游删了代码。
+    """
+    if status == 404:
+        return "missing"
+    if status in (403, 429):
+        return "limited"
+    return "net"
+
+
 def api(url):
-    """直连 GitHub REST，不依赖 gh：CI 里没有交互式登录也能跑。有 GITHUB_TOKEN 就带上。"""
+    """直连 GitHub REST，不依赖 gh：CI 里没有交互式登录也能跑。有 GITHUB_TOKEN 就带上。
+
+    返回 (数据, 故障)。故障取 classify 的三种值，None 表示成功。
+    """
     import urllib.error
     import urllib.request
     req = urllib.request.Request(url, headers={
@@ -59,45 +85,53 @@ def api(url):
         req.add_header("Authorization", "Bearer " + tok)
     try:
         with urllib.request.urlopen(req, timeout=60) as r:
-            return json.loads(r.read().decode("utf-8", "replace"))
-    except (urllib.error.URLError, urllib.error.HTTPError, ValueError, TimeoutError, OSError):
-        return None
+            return json.loads(r.read().decode("utf-8", "replace")), None
+    except urllib.error.HTTPError as e:
+        return None, classify(e.code)
+    except (ValueError, TimeoutError, OSError):
+        return None, "net"
 
 
-def resolve_head(use_cache=True):
+def resolve_head(use_cache=True, max_age=HEAD_TTL):
+    """取上游当前 main 的 sha。缓存超过 max_age 秒就重取，否则「当前 main」这句话不成立。"""
+    import time
     mark = os.path.join(CACHE_DIR, "head.txt")
-    if use_cache and os.path.isfile(mark):
+    if use_cache and os.path.isfile(mark) and time.time() - os.path.getmtime(mark) <= max_age:
         with open(mark, encoding="utf-8") as f:
             sha = f.read().strip()
         if sha:
-            return sha
-    meta = api("https://api.github.com/repos/" + UPSTREAM)
+            return sha, True
+    meta, err = api("https://api.github.com/repos/" + UPSTREAM)
     branch = (meta or {}).get("default_branch") or "main"
-    data = api("https://api.github.com/repos/%s/commits/%s" % (UPSTREAM, branch))
+    data, err2 = api("https://api.github.com/repos/%s/commits/%s" % (UPSTREAM, branch))
     sha = (data or {}).get("sha", "")
     if sha:
         os.makedirs(CACHE_DIR, exist_ok=True)
         with open(mark, "w", encoding="utf-8") as f:
             f.write(sha)
-    return sha
+        return sha, False
+    return "", err2 or err or "net"
 
 
 def upstream_lines(path, head):
+    """返回 (行列表, 故障)。故障非 None 时不能据此说上游没有该文件。"""
     os.makedirs(CACHE_DIR, exist_ok=True)
     fn = os.path.join(CACHE_DIR, "%s.%s.txt" % (head[:8], path.replace("/", "__")))
     if os.path.isfile(fn):
         with open(fn, encoding="utf-8", errors="replace") as f:
-            return f.read().split(NL)
-    data = api("https://api.github.com/repos/%s/contents/%s?ref=%s" % (UPSTREAM, path, head))
+            return f.read().split(NL), None
+    data, err = api("https://api.github.com/repos/%s/contents/%s?ref=%s" % (UPSTREAM, path, head))
+    if err:
+        return None, err
     if not data or not data.get("content"):
-        return None
+        return None, "missing"
     try:
         text = base64.b64decode(data["content"]).decode("utf-8", "replace")
     except Exception:
-        return None
+        return None, "net"
     with open(fn, "w", encoding="utf-8", newline=NL) as f:
         f.write(text)
-    return text.split(NL)
+    return text.split(NL), None
 
 
 def where_symbol(lines, token):
@@ -165,14 +199,22 @@ def enclosing(lines, token, n):
 
 
 def check(anchors, head):
+    """逐条核对锚点。状态四种：ok 对得上，drift 行号漂了，gone 上游 404（真结论），
+    unreachable 取不到（限流或断网，不是结论）。把 gone 与 unreachable 混在一起，
+    一次限流就会被读成「上游把文件删了」。"""
     file_cache, rows = {}, []
     for an in anchors:
         path = an["path"]
         if path not in file_cache:
             file_cache[path] = upstream_lines(path, head)
-        lines = file_cache[path]
+        lines, err = file_cache[path]
+        if err == "missing":
+            rows.append(dict(an, status="gone", detail="上游 404：该文件已改名或已删除"))
+            continue
         if lines is None:
-            rows.append(dict(an, status="gone", detail="上游取不到该文件（可能已改名或删除）"))
+            rows.append(dict(an, status="unreachable",
+                             detail="限流（403/429），带 GITHUB_TOKEN 再跑" if err == "limited"
+                                    else "传输失败（超时或断网）"))
             continue
         drift, present = [], []
         for n in an["nums"]:
@@ -196,6 +238,24 @@ def check(anchors, head):
     return rows
 
 
+def self_test():
+    """钉住两处真出过错的形状：状态分类，以及从一句话里抓行号。"""
+    cases = [
+        (classify(404), "missing"), (classify(403), "limited"), (classify(429), "limited"),
+        (classify(500), "net"), (classify(301), "net"),
+        # issue 号带 #、章节号带 §，都不该被当成行号；「NNN 行」「:NNN」「（NNN」三种形状要抓到
+        (window_nums("读于 :35 与 1050 行"), [35, 1050]),
+        (window_nums("issue #3683 §4.2 自查 5、6、8"), []),
+        (window_nums("（id 212、name 213）"), [212, 213]),
+        (window_nums("覆盖率 95%"), []),
+    ]
+    bad = [(i, got, want) for i, (got, want) in enumerate(cases) if got != want]
+    for i, got, want in bad:
+        print("  自检失败 #%d: 得到 %r 期望 %r" % (i, got, want))
+    print("探针自检 %d 例：%s" % (len(cases), "全部通过" if not bad else "%d 例失败" % len(bad)))
+    return 1 if bad else 0
+
+
 def main():
     ap = argparse.ArgumentParser(description="profile 锚点漂移探针")
     ap.add_argument("--profile", default=DEFAULT_PROFILE)
@@ -203,8 +263,11 @@ def main():
     ap.add_argument("--strict", action="store_true", help="有漂移就退出 1（默认只报告）")
     ap.add_argument("--limit", type=int, default=0)
     ap.add_argument("--fresh", action="store_true", help="忽略缓存重拉")
+    ap.add_argument("--self-test", action="store_true", help="只跑自检，不碰网络")
     a = ap.parse_args()
 
+    if a.self_test:
+        return self_test()
     if not os.path.isfile(a.profile):
         print("用法错误: 找不到 profile:", a.profile)
         return 2
@@ -217,26 +280,36 @@ def main():
     if a.limit:
         anchors = anchors[:a.limit]
 
-    head = resolve_head(use_cache=not a.fresh)
+    head, from_cache = resolve_head(use_cache=not a.fresh)
     if not head:
-        print("探针取不到上游 %s 的当前 sha（gh 未授权或离线），本次不作判定。" % UPSTREAM)
+        print("探针取不到上游 %s 的当前 sha（匿名限额、离线或凭据问题），本次不作判定。" % UPSTREAM)
         return 2
 
     rows = check(anchors, head)
-    drift = [r for r in rows if r["status"] != "ok"]
+    unreachable = [r for r in rows if r["status"] == "unreachable"]
+    drift = [r for r in rows if r["status"] in ("drift", "gone")]
     if a.json:
-        print(json.dumps({"upstream": UPSTREAM, "head": head, "anchors": len(rows),
-                          "ok": len(rows) - len(drift), "drift": drift}, ensure_ascii=False, indent=1))
+        print(json.dumps({"upstream": UPSTREAM, "head": head, "head_from_cache": from_cache,
+                          "anchors": len(rows), "ok": len(rows) - len(drift) - len(unreachable),
+                          "unreachable": len(unreachable), "drift": drift},
+                         ensure_ascii=False, indent=1))
     else:
-        print("上游 %s，当前 main = %s" % (UPSTREAM, head[:9]))
-        print("锚点核对 %d 条：对得上 %d，有问题 %d" % (len(rows), len(rows) - len(drift), len(drift)))
-        for r in drift[:30]:
+        print("上游 %s，当前 main = %s%s" % (UPSTREAM, head[:9],
+              "（取自 %d 小时内的缓存，--fresh 可强制重取）" % (HEAD_TTL // 3600) if from_cache else ""))
+        print("锚点核对 %d 条：对得上 %d，漂移 %d，取不到 %d"
+              % (len(rows), len(rows) - len(drift) - len(unreachable), len(drift), len(unreachable)))
+        for r in (drift + unreachable)[:30]:
             print("  [%s] profile 第 %d 行  %s  记录号 %s\n        %s"
                   % (r["status"], r["line"], r["path"], "/".join(map(str, r["nums"][:6])), r["detail"]))
-        if len(drift) > 30:
-            print("  ...其余 %d 条用 --json 查看" % (len(drift) - 30))
-        print("结论：" + ("全部锚点在当前 main 上仍对得上。" if not drift else
-                        "行号已漂。按 detail 更新行号，或把锚点降成「只写标识符 + 读于 <sha>」。"))
+        if len(drift) + len(unreachable) > 30:
+            print("  ...其余 %d 条用 --json 查看" % (len(drift) + len(unreachable) - 30))
+        if unreachable:
+            print("结论：%d 条锚点本次无法判定（取不到上游，不算漂移）。" % len(unreachable))
+        else:
+            print("结论：" + ("全部锚点在当前 main 上仍对得上。" if not drift else
+                            "行号已漂。按 detail 更新行号，或把锚点降成「只写标识符 + 读于 <sha>」。"))
+    if unreachable:
+        return 2
     return 1 if (a.strict and drift) else 0
 
 

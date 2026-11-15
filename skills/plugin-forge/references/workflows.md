@@ -8,7 +8,7 @@
 | 阶段 | 执行者 | 产出 |
 |---|---|---|
 | 1. 分拣 | lead | 任务一句话概括 + 确认目标平台 + 读 profile；确认是"新做"还是"改" |
-| 1a. **先搜后建（rbb 门禁）** | market-research（lead 派单） | 三轮检索结论 + 可改性与许可评估 + 「共建上游 / 复用现成 / 自建」三选一判定；结论没出来不进第 2 步 |
+| 1a. **先搜后建（rbb 门禁）** | market-research（lead 派单） | 三轮检索结论 + 可改性与许可评估 + 四档判决「加入上游（Join）/ 做官方扩展（Extend）/ 分叉并保持同步（Fork）/ 自建（Build，附不可复用的具体理由）」；结论没出来不进第 2 步 |
 | 2. 起草方案 | planner（含糊时）→ architect | 方案 ≤500 字：定位 / 入口类型 / 数据 / 依赖 / 验收 / 失败降级 / 风险 |
 | 3. **契约审议（门禁）** | **contract** | 准奏 / 封驳（对照 profile 能力面逐条核）；准奏落盘 `contract-approval.json` |
 | 4. 派发 | lead | 按成员拆分，无依赖的并行 |
@@ -16,17 +16,22 @@
 | 6. 运行时验证 | sandbox（+ reliability 发布就绪清单） | 隔离环境真实加载记录 |
 | 7. 验收汇编 | lead | 三段回奏（见下） |
 
-**不可跳步**：1a 的检索结论没出来，不进取证与起草；没有 contract 准奏，不许写码。
+**不可跳步**：1a 的检索结论没出来，不进第 2 步（起草方案）；没有 contract 准奏，不许写码。
+
+写码前先过机器门禁：`python ${FORGE_HOME}/scripts/check_contract_approval.py --approval contract-approval.json <要写的文件…>`；脚本 REFUSE 即不许动笔（含 scope 外文件）。**这是流程辅助，不是强制**：脚本只校验记录，验不了签发人身份，也不会自动触发，靠各角色自觉调用；宿主级强制需另配 PreToolUse hook。派工规模先按 `references/task-size-routing.md` 分拣：小改动只到 dev + tdd，契约与安全门禁不豁免。
 
 ### 1a 先搜后建（rbb）到底要交什么
 
-- 权威本体是上游插件 `reuse_before_build`（作者 1-dcjiang，MIT）。本团**只引用不内嵌**：v0.3.12 / commit 4a14fbd（2026-11-15 核对）。规则本体带 sha256 正典哈希与机械校验，由该插件自己维护，我们不复读、不另立一套编号。
-- 三轮检索：功能原词 → 泛化词 → 场景词。每轮记来源、结论、时间戳，不写「搜过了」这种无凭据的话。
-- 结论必须是三选一：加入上游 / 复用现成（附许可与可改性判断）/ 自建（附**不可复用的具体理由**）。
-  拿不出第三条的理由，就按前两条走，不许直接开新工程。
-- 与契约门禁的分工：1a 判「该不该由我们做」，第 3 步判「平台能不能做到」。两道都不许跳，顺序也不能换——先确认不是重复造轮子，再花时间核能力面。
-
-写码前先过机器门禁：`python ${FORGE_HOME}/scripts/check_contract_approval.py --approval contract-approval.json <要写的文件…>`；脚本 REFUSE 即不许动笔（含 scope 外文件）。**这是流程辅助，不是强制**：脚本只校验记录，验不了签发人身份，也不会自动触发，靠各角色自觉调用；宿主级强制需另配 PreToolUse hook。派工规模先按 `references/task-size-routing.md` 分拣：小改动只到 dev + tdd，契约与安全门禁不豁免。
+- 权威本体是上游插件 `reuse_before_build`（作者 1-dcjiang，仓库 1-dcjiang/neko-reuse-before-build，MIT。插件 id 与仓库名不同，别按 id 猜地址）。本团**只引用不内嵌**：v0.3.12 / commit 4a14fbd（2026-11-15 核对）。规则本体带 sha256 正典哈希与机械校验，由该插件自己维护，本团不复读、不另立一套编号。要拿机械校验需先安装该插件：校验器跑在 N.E.K.O 宿主，Claude Code 与 Codex 里 1a 靠执行纪律。
+  本节是执行要点摘要，不是条文复述：三轮见上游 `skills/reuse-before-build/SKILL.md`「Step 1 — Discover」与 `references/zh-guide.md`「第 1 步：发现」，判决表见同一 SKILL.md「Step 2 — Evaluate」。摘要按 v0.3.12 / commit 4a14fbd（2026-11-15 读）核对过；不一致时以上游为准，并回来同步 SKILL.md 铁律 3、agents/plugin-forge-market-research.md 本职 4、codex/prompts/plugin-forge.md 第 1a 步。
+- 三轮检索按来源分：轮 1 GitHub 仓库与代码 → 轮 2 包生态与清单（npm / PyPI / crates.io / Maven / Homebrew、awesome-list、框架官方插件目录、Docker Hub）→ 轮 3 人已经提过吗（候选仓库 issue / discussion，Stack Overflow / HN / Reddit / V2EX / 知乎）。关键词扩展（功能词 / 领域词 / 机制词 / 竞品与引用词）是检索前的独立步骤，不算一轮。
+- 每个候选记一行：owner/name ｜ stars ｜ 最近提交日期 ｜ 许可 ｜ 缺什么 ｜ 命中来源（轮次＋检索串）。一条都没命中时，写实际跑过的检索串与覆盖的来源，不写「搜过了」这种无凭据的话。不许编造仓库、星数、提交日期或许可。
+- 快速档（小改动、一次性脚本）：3 条检索串（英文功能词 + `awesome <领域>` + `<功能> alternative`），读前 5 条结果，回复只写三行 `Reused / Change / Risk`。这一档省掉六维评分与贡献流程，不省「有没有人做过」这一问。
+- 本团附加（非 rbb 要求）：每轮另记检索时间戳，方便事后复盘节奏。
+- 判决是上游四档取一，先过可改性硬闸（绿 / 黄 / 红；红不许 Join，黄只能 Extend）：
+  加入上游（Join，当公共贡献者提 PR）/ 做官方扩展（Extend，挂在稳定接缝后面）/ 分叉并保持同步（Fork，改完把改进 PR 回上游）/ 自建（Build，第一行写 `不可复用原因 / Not reusable because: <license | direction | maintenance | requirement mismatch>`）。
+  拿不出 Build 的不可复用原因，就按前三档走，不许直接开新工程。
+- 与契约门禁的分工：1a 判「该不该由本团做」，第 3 步判「平台能不能做到」。两道都不许跳，顺序也不能换——先确认不是重复造轮子，再花时间核能力面。
 
 ## Workflow B：修一个跑不起来的插件（单成员直调）
 

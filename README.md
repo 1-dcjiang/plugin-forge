@@ -32,6 +32,7 @@ N.E.K.O 是 Apache-2.0 项目。本仓库只引用它的路由、契约、端口
 ## 机制
 
 - 契约先行：`agents/plugin-forge-contract.md` 持真实否决权，没有准奏不写码。准奏落盘 `contract-approval.json`，写码前由 `skills/plugin-forge/scripts/check_contract_approval.py` 机器校验；scope 外的文件同样拒绝。
+- 先搜后建（rbb）：Workflow A 第 1a 步做三轮检索，判决取加入上游 / 做官方扩展 / 分叉并保持同步 / 自建四档之一，小改动走快速档。权威本体是上游插件 reuse_before_build，本团只引用不内嵌。条文见 skills/plugin-forge/SKILL.md 铁律 3 与 skills/plugin-forge/references/workflows.md。
 - TDD + 极简 + 安全门禁 + 运行时验证（`skills/neko-plugin-sandbox/` 真实冒烟）。
 - 工作流 H：宿主破坏性变更（RFC/changelog）对插件机队的影响审计与上游回帖礼仪。
 - 双风格文档门禁：`plugin-forge-docs` 内置 ASD-STE100 + humanizer（中英同等），见 `skills/plugin-forge/references/style-anti-slop.md`；外部内容入库先过 `AUDIT.md` 流程（四项安全检查与评分规则见 `skills/plugin-forge/references/security-checklist.md`）。
@@ -53,6 +54,7 @@ skills/plugin-forge/       范式 skill + references（含 neko/ 扩展阅读 23
 skills/neko-plugin-sandbox/ NEKO 运行时沙箱 skill + scripts/sandbox.py
 codex/prompts/     Codex 单代理运行入口
 scripts/           generate_roster_tables.py（名册表生成）+ session_capability_refresh.py（能力刷新，只读）
+                   + profile_drift.py（profile 锚点漂移核对，读上游当前 main；仓库维护面，不装进宿主）
 roster.json        团队名册唯一来源
 .github/           sync-check CI：名册漂移、门禁自检
 AUDIT.md LICENSE
