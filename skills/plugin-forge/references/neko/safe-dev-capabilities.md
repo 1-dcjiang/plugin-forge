@@ -2,7 +2,13 @@
 
 > 用户指令「引用安全的」= **引入所有判定为安全的开发类 skill / MCP / agent**（2026-11-03 快照；**2026-11-06 未联网复核上游状态**，引用须标日期）。
 > **性质：登记引用** —— 不安装、不复制源码进包、不修改用户环境、不自动执行任何 setup/hook。
-> **挂接状态：2026-11-03 已挂接（2026-11-06 复核未变）** —— 10 个成员 agent 文档（+ 主理人 `agents/neko-plugin-ops-team-lead.md` 第 77–80 行，共 11 个文档）均新增「安全开发能力（已引用）」小节并列出具体项；README「团队构成」表、主理人「团队成员」表、intro.html 卡片均加 `+安全能力` 标记。仍不安装、不复制源码、不改用户环境。会话启动刷新口径见 `references/capability-baseline.md` / `references/session-refresh-sop.md`（均于 2026-11-06 已落盘：分别为 12 检测点指纹基线 / 会话启动能力刷新 SOP）。
+> **挂接状态：2026-11-03 那次挂接已失效，只作历史记录保留。** 别按本节派活。
+> 当时改的是 10 个成员 agent 文档与主理人 `agents/neko-plugin-ops-team-lead.md`，共 11 个文档。
+> README 的团队构成表、主理人的团队成员表与 `intro.html` 卡片也加了 `+安全能力` 标记。
+> 团队后来改名成 `plugin-forge-*`，上面那批文件已不在仓库里。
+> 本机实测 `grep -l 安全开发能力 agents/*.md` 命中 0 个。
+> 现在的编制是 1 主理人 + 13 专家，人数以 `roster.json` 为准。
+> 文中提到的 `references/capability-baseline.md` 与 `references/session-refresh-sop.md` 也不在仓库里。
 > 候选总表见 `references/dev-agent-ecosystem.md`；本文件是从中筛出的**安全子集**及其就绪状态。
 
 ## 1. 「安全」判定标准

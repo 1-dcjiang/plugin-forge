@@ -9,7 +9,7 @@
 | blader/humanizer | v4.0.0 | MIT | SKILL.md 纯改写规则，1 个 Wikipedia 外链；scripts/validate-package.py 只读本包文件做结构校验 | 通过。规则已并入 references/style-anti-slop.md，未整包 vendor |
 | op7418/Humanizer-zh | main | MIT | SKILL.md 中文模式库；tests/check_structure.py 只读比对两份文本 | 通过。同上 |
 | woosal1337 asd-ste100 kit | 2.0.5 | MIT（kit；ASD-STE100 规范本身版权属 ASD） | ste-lint.py 本地 lint；hooks 为 Claude Code 专用；无网络 | 通过。规则摘要并入 style-anti-slop.md；本仓库未复制其代码文件，仅引用与摘要 |
-| neko-plugin-sandbox/scripts/sandbox.py | 本仓库自有 | — | 全 127.0.0.1；git/uv/pip 子进程仅用于本地沙箱；taskkill 先核对进程身份；rmtree 只删 `plugin/plugins/<id>` 下的目录 | 通过（2026-11-14 复核）。依据源码 @645da54 的契约断言已在 0984249 复验。**后两条是有条件的，2026-11-11 那轮逐行复核时并不成立**：删除面靠 `plugin-add`/`plugin-rm` 先把 id 按 `^[A-Za-z_][A-Za-z0-9_]*$` 校验（`plugin-add` 与 `cmd_plugin_rm` 各校验一次 id）才关在 plugins 目录内；杀进程面靠 `_pid_is_sandbox_server` 先读命令行，`cmd_stop` 调用它；旧版这里写的是行号，已按本文件「不写行号」的口径换成符号引用（2026-11-15：当时写的 585/616/385/420 全部漂了），命令行读不到时仍会照杀。边界：任一校验被删或被放宽，本行结论即刻失效，须重新逐行复核 |
+| neko-plugin-sandbox/scripts/sandbox.py | 本仓库自有 | — | 全 127.0.0.1；git/uv/pip 子进程仅用于本地沙箱；taskkill 先核对进程身份；rmtree 只删 `plugin/plugins/<id>` 下的目录 | 通过（2026-11-14 复核）。依据源码 @645da54 的契约断言已在 0984249 复验。**后两条是有条件的，2026-11-11 那轮逐行复核时并不成立**：删除面靠 `plugin-add`/`plugin-rm` 先把 id 按 `^[A-Za-z_][A-Za-z0-9_]*$` 校验（`plugin-add` 与 `cmd_plugin_rm` 各校验一次 id）才关在 plugins 目录内；杀进程面靠 `_pid_is_sandbox_server` 先读命令行，`cmd_stop` 调用它；旧版这里写的是行号，已按本文件「不写行号」的口径换成符号引用（2026-11-15：当时写的 585/616/385/420 全部漂了），命令行读不到时拒杀，除非明确 `--force`（2026-11-15 改，判定函数 `should_kill`，自检 `kill 判定` 六种组合钉住）。边界：任一校验被删或被放宽，本行结论即刻失效，须重新逐行复核 |
 | session_capability_refresh.py | 本仓库自有 | — | 只读扫描 + stdout JSON，零第三方依赖，异常全捕获 exit 0 | 通过。示例路径已脱敏为 ~（**教训**：那次脱敏把 `ROOT` 的字面 `~` 留成未展开路径，脚本一度恒报「路径缺失」；2026-11-14 改为 `os.path.expanduser` 读取、只在输出侧脱敏） |
 | avatars/*.jpg/png（14） | — | — | EXIF 扫描 | 无 EXIF，通过（avatars 已随 v2.0.0 移除，见整合记录） |
 | intro.html（2） | — | — | 无 <script>/外链 src/onclick | 通过（intro.html 已随 v2.0.0 移除，见整合记录） |
@@ -152,30 +152,41 @@ N.E.K.O 服务与 git/uv/pip 都不读它们。自检名单扩到 61 项（本�
 
 | 跑法 | 范围 | 发现 | 得分 | 结论 |
 |---|---|---|---|---|
-| 分诊跑 | 代码/配置 11 个文件，无豁免 | SEC-3 4 处、SEC-4 6 处 | 70 | 修完再放 → 逐条分流（见下） |
-| 复跑 | 同范围，豁免下表 2 项（余 9 文件） | 0 处 | 100 | 放行（exit 0） |
-| 文档扫 | 加 --include-docs，同两豁免：代码配置 11 + 文档 48 − 豁免 2 = 57 文件 | SEC-3 6 处、SEC-4 22 处 | 60 | 均为提及性文字，无行为 |
+| 分诊跑 | 无豁免，文件数看 `--json` 的 `scanned_files` | 分流见下 | 70（历史值） | 修完再放 |
+| 复跑 | 同范围，豁免下表 3 项 | 0 处 | 95（2026-11-15 实测，见下） | 放行（exit 0） |
+| 文档扫 | 加 `--include-docs`，同三条豁免 | SEC-3 6 处、SEC-4 22 处 | 60（历史值） | 见下方「文档扫扫的是缓存」一条 |
 
-- 分诊跑 10 处发现全部落在两个文件：`skills/plugin-forge/scripts/security_audit.py`（正则定义与自述句——扫描器定义，非行为）；`skills/neko-plugin-sandbox/scripts/sandbox.py`（127.0.0.1 探活、pip 装依赖、git fetch——2026-11-11 已逐行复核，声明用途见上文与残留风险节）。即两条豁免的依据。SEC-1、SEC-2 零发现，全仓库无明文密钥与越界写入。
+- 分诊跑 10 处发现全部落在两个文件：`skills/plugin-forge/scripts/security_audit.py`（正则定义与自述句——扫描器定义，非行为）；`skills/neko-plugin-sandbox/scripts/sandbox.py`（127.0.0.1 探活、pip 装依赖、git fetch——2026-11-11 已逐行复核，声明用途见上文与残留风险节）。即三条豁免的依据。SEC-1、SEC-2 零发现，全仓库无明文密钥与越界写入。
 - 文档扫 28 处命中集中在审计与调研文档自身（security-checklist.md、neko 调研笔记、本文件、沙箱 SKILL.md），是规则描述与调研记录，不是可执行行为；SEC-4 的"已声明"判定以人工对照本文件为准，不靠脚本给满分。逐文件分布以重跑 `--json` 的输出为准，本节不再手抄。
 - 盲区提醒：本节的 SEC-1 / SEC-2 数字出自放宽前的规则——旧 SEC-1 匹配不到反斜杠 `C:\Users\<名>` 路径，旧 SEC-2 匹配不到 JSON `"api_key": "..."` 与 `.env KEY=value`。放宽规则后复跑，本仓库结果不变（SEC-1 1 处、SEC-2 0 处、95/100、放行，实测）。
-- 2026-11-14 二次复跑（SEC-2 覆盖面重做）：旧式 `` 在下划线处失配，`OPENAI_API_KEY=`、`DB_PASSWORD=`、`AWS_SECRET_ACCESS_KEY=`、`MY_SECRET=` 四种形状全部漏报。先改成只看字母边界并允许 `NAME_` 前缀与 `_WORD` 后缀段，复核又指出裸 token、驼峰、粘连名与 URL 内嵌凭据仍漏，且变量引用型右值会误报——一票否决项误报的代价比漏报更大。现最终形态是**按标识符拆词**判定：键名切 `_` `.` `-` 与驼峰后比对词表，右值是属性路径、全大写常量、类型标注、纯数字、URL、自引用或函数调用时排除。自检由 14 例增至 53 例（含误报反例与盲区分类），CI 除自检外还对本仓库真跑一次扫描。本仓库仍是 95/100、SEC-2 0 处（实测）。
+- 2026-11-14 二次复跑（SEC-2 覆盖面重做）：旧式 `` 在下划线处失配，`OPENAI_API_KEY=`、`DB_PASSWORD=`、`AWS_SECRET_ACCESS_KEY=`、`MY_SECRET=` 四种形状全部漏报。先改成只看字母边界并允许 `NAME_` 前缀与 `_WORD` 后缀段，复核又指出裸 token、驼峰、粘连名与 URL 内嵌凭据仍漏，且变量引用型右值会误报——一票否决项误报的代价比漏报更大。现最终形态是**按标识符拆词**判定：键名切 `_` `.` `-` 与驼峰后比对词表，右值是属性路径、全大写常量、类型标注、纯数字、URL、自引用或函数调用时排除。自检例数看 `--self-test` 输出（2026-11-15 实跑 82 例）（含误报反例与盲区分类），CI 除自检外还对本仓库真跑一次扫描。本仓库仍是 95/100、SEC-2 0 处（实测）。
 - 复扫触发：仓库脚本变更 ≥5 个文件、或新增外部内容入库时重跑，结果追加进本节。
+
+### 2026-11-15 复跑（P4/P6/P7 之后）
+
+- 命令：`python skills/plugin-forge/scripts/security_audit.py . --allow ` + 三条豁免（逗号分隔，`--allow` 现在也可重复传）。
+- 实跑结果：SEC-1 1 处、SEC-2 0 处、SEC-3 0 处、SEC-4 0 处，总分 95/100，放行。
+- 自检计数一律不抄：`security_audit.py --self-test` 报 82 例，`sandbox.py --self-test` 报 76 项，
+  `profile_drift.py --self-test` 报 20 例，`check_contract_approval.py --self-test` 报 PASS。
+- 文档扫的新账：`--include-docs` 会把 `scripts/.drift-cache/` 里缓存的上游源码一起扫。
+  2026-11-15 实测 194 处 SEC-4 命中里 163 处来自那堆缓存文本。
+  所以「文档扫」那个分数现在量的是缓存，不是本仓文档。它是 CI 的 report-only 步骤，不阻塞。
+  待办：给扫描器加一条默认排除 `.drift-cache/` 的口径，或把缓存挪到仓库外。
 
 ### 豁免复核（2026-11-14，对照已推送树 08e3c77 逐条核对）
 
-- 复跑命令（9 文件 0 发现，总分 100，exit 0）：`python skills/plugin-forge/scripts/security_audit.py . --allow skills/plugin-forge/scripts/security_audit.py,skills/neko-plugin-sandbox/scripts/sandbox.py`
+- 复跑命令（三条豁免，exit 0；得分以实跑为准）：`python skills/plugin-forge/scripts/security_audit.py . --allow skills/plugin-forge/scripts/security_audit.py,skills/neko-plugin-sandbox/scripts/sandbox.py,scripts/profile_drift.py`
 - 豁免 1 `skills/plugin-forge/scripts/security_audit.py`：**保留**。命中数随夹具变动，2026-11-15 实测以脚本为准；全部是文件头说明、检测规则自身的字面量与自检夹具。**夹具一律拆写**（`"-----BEGIN " + "RSA PRIVATE KEY-----"）：本文件会被自己扫，A472 抓到过我在新自检里写了两个完整的私钥头字面量，那会让不带 `--allow` 的自查直接把自己否决。
-- 豁免 2 `skills/neko-plugin-sandbox/scripts/sandbox.py`：**保留**。命中均为已声明功能（新增一条 URL 内嵌凭据在 `cmd_start` 的本地回环示例里）。杀进程面的判断函数是 `_pid_is_sandbox_server`，由 `cmd_stop` 调用；它读命令行与 `/proc`，读不到时仍会照杀。本行原来写的是行号，已按「不写行号」的口径换成符号引用（2026-11-15，A472 第 7 条）。
+- 豁免 2 `skills/neko-plugin-sandbox/scripts/sandbox.py`：**保留**。命中均为已声明功能（新增一条 URL 内嵌凭据在 `cmd_start` 的本地回环示例里）。杀进程面的判断函数是 `_pid_is_sandbox_server`，由 `cmd_stop` 调用；它读命令行与 `/proc`。判定交给 `should_kill`：读不到（None）时拒杀并让调用方带 `--force` 再来一次，这是 2026-11-15 的改动；旧版在这里 fail-open，伪造 pid 照样被 taskkill。自检加了 6 条 kill 判定用例，撤掉 `should_kill` 会报 3 条失败。本行原来写的是行号，已按「不写行号」的口径换成符号引用（2026-11-15，A472 第 7 条）。
 - 豁免 3 `scripts/profile_drift.py`：**新增**（2026-11-15）。3 处命中全在 `api()` 一个函数里：`import urllib.request`、`urllib.request.Request`、`urlopen`。用途＝只读拉取 `api.github.com/repos/Project-N-E-K-O/N.E.K.O` 的 commit 与 contents，用于锚点漂移探针；无写请求、无 exec、无落盘除 `scripts/.drift-cache/`（已 gitignore）之外的文件；带 GITHUB_TOKEN 时只作为 Authorization 头回给 api.github.com，不外发。边界：改成抓取非该仓库、或把响应内容当代码执行，本依据即刻失效。
-- 口径（上表按此改写）：文件数按扫描器的扩展名池算——代码/配置 13 个（5 .py + 5 .json + 1 .yml + 2 个无扩展名文件），文档 48 个 .md；复跑减 2 个豁免文件得 11。旧记的 14/12/62 是提交前工作区状态，作废；各跑得分（70/100/60）不变。
+- 口径：文件数不要手抄。取法是 `--json` 的 `scanned_files` 与 `skipped_files`，豁免条数看 `.github/workflows/sync-check.yml` 的 `AUDIT_ALLOW`（2026-11-15 实测：扫描 15 个、跳过 84 个、三条豁免）。本行以前写 5 .py / 池 13 / 文档 48 / 减 2 得 11，四个数全过期：实跑是 6 个 .py、池 15、49 个 .md、减 3 得 12。
 - 本轮 8 项修复（2026-11-14）没有增删文件，但扫描器扩面后代码池为 13 个（加入无扩展名与 `.env*` 文件）。新增文字按 SEC-1 至 SEC-4 的模式表人工比对过，没有新触发词。扫描器本轮未重跑，上表的发现数沿用上次实测。
 - CI 状态：sync-check #1 已在 GitHub Actions 真实 runner 通过（08e3c77，9s，四步全绿）。
 
 ## 例行复跑（2026-11-14，扫描器扩面后）
 
 - 扫描器本轮三处变更：不再把行截断到 500 字符；无扩展名文件与 `.env*` 进扫描池；被跳过的条目写进 `skips` 清单并在结尾报数。前两条**扩大**发现面，所以旧记录的 100 分与本次不可直接对比。
-- 复跑命令（沿用同两条豁免）：`python skills/plugin-forge/scripts/security_audit.py . --allow skills/plugin-forge/scripts/security_audit.py,skills/neko-plugin-sandbox/scripts/sandbox.py`
-- 结果：SEC-1 1 处、SEC-2 / SEC-3 / SEC-4 各 0 处，总分 **95/100，放行**。SEC-5（不计分）本仓库 0 处。未扫描 56 项（49 个 .md 不在池内、4 个构建/缓存目录、2 个豁免、1 个 .llm）——这些位置本次没有证据，不记为通过；完整清单看 `--json` 的 `skips` 字段。
+- 复跑命令（沿用同三条豁免）：`python skills/plugin-forge/scripts/security_audit.py . --allow skills/plugin-forge/scripts/security_audit.py,skills/neko-plugin-sandbox/scripts/sandbox.py,scripts/profile_drift.py`
+- 结果：SEC-1 1 处、SEC-2 / SEC-3 / SEC-4 各 0 处，总分 **95/100，放行**。SEC-5（不计分）本仓库 0 处。未扫描项数看 `--json` 的 `skipped_files`（2026-11-15 实测 84：49 个 .md 不在池内、29 个 .txt 缓存、4 个无扩展名、1 个 .llm、3 个豁免）——这些位置本次没有证据，不记为通过；完整清单看 `--json` 的 `skips` 字段。
 - SEC-1 命中：`scripts/session_capability_refresh.py:43` `CODEBUDDY = os.path.expanduser("~/.codebuddy")`，规则「指向敏感家目录」。**依据**：该脚本按设计只读单机 CLI 配置做能力快照，不写、不删、不外传，输出侧另行脱敏。上一版没报这一条，是因为 `ROOT` 的 `~` 从未展开、脚本恒报「路径缺失」，而该规则要匹配 `expanduser(`；把路径修对之后规则才第一次真的看见它。**边界**：只读性质一旦改变（新增写入、上传或把内容拼进请求），本依据即刻失效，须重新逐行复核。
 - 上一节的 100/100 保留，作为截断与扩展名过滤仍在时的历史值。

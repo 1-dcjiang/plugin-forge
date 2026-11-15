@@ -36,7 +36,9 @@ maxTurns: 40
 
 ## 交付前核验
 
-- 英文长文：`python <skill>/scripts/ste-lint.py <文件>`（flavored ≤2.5/100w，strict ≤1.5/100w），报告分数。
+- 英文长文：`python "$HOME/.claude/skills/asd-ste100/scripts/ste-lint.py" <文件>`。
+  脚本属于外部 asd-ste100 kit，不随本包发。装了才跑；没装就按清单自查并在交付里写明没跑成。
+  口径：flavored ≤2.5/100w，strict ≤1.5/100w，报告分数。
 - 中文长文：按清单逐条自查（linter 不覆盖中文）。
 - 只读首行和末行：读者知道下一步做什么、刚发生了什么吗？知道才发。
 
