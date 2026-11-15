@@ -88,7 +88,21 @@ N.E.K.O 服务与 git/uv/pip 都不读它们。自检名单扩到 61 项（本�
 本机实测新剔的就是 4 个会话号。要关联就把值当参数显式传给插件，别依赖环境继承。这句同样写在
 `sandbox.py` 的注释里，两处都有记录。
 
-已知残留：粘连写法（`MYLICENCE`）不删；值里是短占位串（`<token>`、`$VAR`）时不判，避免把模板当凭据。
+已知残留：粘连的 `LICEN[CS]E` 写法（`MYLICENCE`）不删；值里是短占位串（`<token>`、`$VAR`）时不判，避免把模板当凭据。
+
+### 2026-11-15 二次补：粘连 KEY 与值里的 PEM 私钥
+
+上一版把「粘连写法不删」记成已知残留，但 `KEY` 这一族漏得最狠：`PRIVATEKEY`、
+`TLS_PRIVATEKEY`、`ENCRYPTIONKEY`、`SIGNINGKEY`、`MASTERKEY`、`SESSIONKEY` 六个名字
+在值就是整段私钥时仍判「不是凭据」，本机实测复现。第三方插件在沙箱里能读到宿主私钥。
+
+处理：`SECRET_ENV_SUB` 补 `KEY`；新增 `PEM_PRIV_RE`，值里出现 PEM 私钥头就算凭据。
+代价是 `KEYBOARD`、`KEYMAP` 会被子串命中，所以写进 `KEEP_EXACT` 显式保留。
+`LICEN[CS]E` 仍按边界判，不加子串：加了会误删 `LICENSES` 与 `LICENSING`，
+那是上一版明确要保的。
+自检加 2 条保留例与 7 条剔除例（夹具里的 PEM 头按 A472 口径拆写，不让本文件被自己否决）。
+反向对照：在仓库外的副本里撤掉 `KEY` 与 `PEM_PRIV_RE` 两处 → 报
+`ENCRYPTIONKEY`、`SIGNINGKEY`、`MASTERKEY`、`DEPLOY_BLOB` 四条断言失败。实跑 `--self-test` 的项数以命令输出为准。
 
 ## 外部深审 edc862d 的复核（2026-11-15，报告 A464）
 
