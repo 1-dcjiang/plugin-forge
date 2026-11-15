@@ -32,6 +32,20 @@ jobs:
       - name: Sandbox self-test
         run: python skills/neko-plugin-sandbox/scripts/sandbox.py --self-test
       - name: 对本仓库跑一次真实安全扫描
-        run: python skills/plugin-forge/scripts/security_audit.py . --allow skills/plugin-forge/scripts/security_audit.py,skills/neko-plugin-sandbox/scripts/sandbox.py
+        env:
+          AUDIT_ALLOW: skills/plugin-forge/scripts/security_audit.py,skills/neko-plugin-sandbox/scripts/sandbox.py,scripts/profile_drift.py
+        run: python skills/plugin-forge/scripts/security_audit.py . --allow "$AUDIT_ALLOW"
+      - name: 'Report only: 审计两个非阻塞旗标（盲区 / 占位符严格档，不阻塞）'
+        continue-on-error: true
+        env:
+          AUDIT_ALLOW: skills/plugin-forge/scripts/security_audit.py,skills/neko-plugin-sandbox/scripts/sandbox.py,scripts/profile_drift.py
+        run: |
+          python skills/plugin-forge/scripts/security_audit.py . --allow "$AUDIT_ALLOW" --fail-unclear || true
+          python skills/plugin-forge/scripts/security_audit.py . --allow "$AUDIT_ALLOW" --strict-placeholder || true
+      - name: 'Report only: profile 锚点漂移探针（不阻塞）'
+        continue-on-error: true
+        run: python scripts/profile_drift.py
+          --fail-unclear
+          --strict-placeholder
       - name: JSON artifacts parse
         run: python -c "import json,glob;fs=glob.glob('**/*.json',recursive=True)+glob.glob('.claude-plugin/*.json');[json.load(open(p,encoding='utf-8-sig')) for p in fs]"

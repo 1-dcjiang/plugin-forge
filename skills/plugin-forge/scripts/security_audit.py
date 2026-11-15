@@ -202,8 +202,12 @@ def plugin_toml_keys(text):
         if not s or s.startswith("#"):
             continue
         if s.startswith("["):
-            head = re.match(r"^\[\s*([^\]]+?)\s*\]", s)
-            inside = bool(head) and head.group(1).strip().lower() == "plugin"
+            if s.startswith("[["):
+                inside = False          # 数组表 [[x]] 不是 [x] 表，键不能算进顶层
+            else:
+                m = re.match(r"^\[\s*([^\[\]]+)\s*\]", s)
+                name_t = m.group(1).strip() if m else ""
+                inside = name_t.strip("'\"").lower() == "plugin"
             continue
         if inside:
             m = re.match(r"([A-Za-z0-9_-]+)\s*=", s)
@@ -447,6 +451,18 @@ def _self_test():
     complete = "[plugin]\nid = \"a\"\nname = \"n\"\nversion = \"1.0.0\"\nentry = \"m:C\"\n"
     if manifest_gaps("plugin.toml", complete):
         helper_bad.append("字段齐全的 plugin.toml 被误报")
+    # 段头的四种刁钻写法：数组表、点号子段、行尾注释、带引号段名
+    if plugin_toml_keys("[[plugin]]\nid = \"a\"\n"):
+        helper_bad.append("数组表 [[plugin]] 被当成 [plugin] 表收键")
+    if "name" in plugin_toml_keys("[plugin]\nid = \"a\"\n\n[plugin.sub]\nname = \"n\"\n"):
+        helper_bad.append("点号子段 [plugin.sub] 的键被算进顶层")
+    if "entry" in plugin_toml_keys("[[users]]\nentry = 1\n"):
+        helper_bad.append("[[users]] 段头解析出错，键漏进了判定")
+    if plugin_toml_keys("[plugin]  # 段说明\nid = \"a\"  # 必填\nname = \"n\"\n"
+                        "version = \"1.0.0\"\nentry = \"m:C\"\n") != {"id", "name", "version", "entry"}:
+        helper_bad.append("行尾注释让 [plugin] 段解析失效")
+    if "id" not in plugin_toml_keys("[\"plugin\"]\nid = \"a\"\n"):
+        helper_bad.append("带引号的段名 [\"plugin\"] 没认出来")
     # 占位符两档：默认吃掉 example1234567，严格档要放行
     global STRICT_PLACEHOLDER
     STRICT_PLACEHOLDER = False
@@ -466,7 +482,7 @@ def _self_test():
     bad = [c for c in cases if hit(c[0], c[1]) != c[2]]
     for cid, line, want in bad:
         print("SELF-TEST FAIL: %s want=%s got=%s %r" % (cid, want, hit(cid, line), line))
-    n = len(cases) + len(sec5_cases) + len(extra) + 11
+    n = len(cases) + len(sec5_cases) + len(extra) + 16
     ok = not (bad or s5_bad or e_bad or helper_bad)
     print("SEC-1/2/5 + 边界自检: %s（%d 例）" % ("PASS" if ok else "FAIL", n))
     return 0 if ok else 1
