@@ -25,14 +25,14 @@ python ${FORGE_HOME}/scripts/security_audit.py <repo> [--allow 前缀1,前缀2] 
 机器查：GitHub / OpenAI / AWS / Slack token 形态；`PRIVATE KEY` 块；URL 内嵌凭据（`scheme://user:pass@`）；明文赋值按**标识符拆词**判定 —— 键名按 `_` `.` `-` 与驼峰切词后命中 password / passwd / pwd / secret / token / credential / api_key / access_key / refresh_token 等，或整名含 password·secret·credential 这类高区分度子串（占位值已过滤）。
 值是**代码引用**时不算密钥，这是有意的排除面：属性路径（`args.password`）、全大写常量（`max_tokens=MAX_TOKENS`）、类型标注（`Optional[str]`）、纯数字（`token_count = 1234567890`）、普通 URL 值、与键同名的自引用（`self.password = password`）、函数调用右值。
 URL 内嵌凭据一条同样过滤模板占位：`${DB_PASSWORD}`、`<password>` 不算真口令。
-已知边界：值不足 8 字符不报（`PASSWORD=myword` 6 位、`password = "abc"` 都漏）；`tokenizer` 这类同前缀词不误报；不含任何关键词的纯随机串扫不到，仍要人工抽查。纯字母且够长的右值仍会报（`db_password = secretvalue` 命中），所以「变量引用」的排除只针对属性路径、全大写常量、类型标注、纯数字、URL 与自引用这几种明确形态。
+已知边界：值不足 8 字符不报（`PASSWORD=myword` 6 位、`password = "abc"` 都漏）；`tokenizer` 这类同前缀词不误报；不含任何关键词的纯随机串扫不到，仍要人工抽查。纯字母且够长的右值仍会报（`db_password = secretvalue` 命中），所以「变量引用」的排除只针对属性路径、全大写常量、类型标注、纯数字、URL 与自引用这几种明确形态。占位值默认也被吃掉，`example1234567` 这种「占位词 + 数字」同样不报；要按真值对待就加 `--strict-placeholder`，它只收紧这一种情形，文档示例值会因此开始报。
 修法：改环境变量或宿主安全存储（对照 profile §6）；**已提交的凭据立即轮换**，并清理历史。
 判定：**任一真实命中 = 一票否决，直接阻断**，不参与总分。
 
 ### SEC-5 清单形状（不计分）
 
 要求：清单不夹带装包即执行的钩子，依赖走索引而不是直连远端包，必填字段齐。
-清单文件无条件进扫描池（`requirements.txt` 属 `.txt`，旧版不加 `--include-docs` 就读不到，而直连依赖最常写在这里）。
+清单文件无条件进扫描池（`requirements.txt` 属 `.txt`，旧版不加 `--include-docs` 就读不到，而直连依赖最常写在这里）。`plugin.toml` 的必填按 **`[plugin]` 段**判定：子段（如 `[plugin_runtime]`）里的同名键不再顶掉顶层缺项，别的段里的键也不再算已填。
 机器查：`preinstall` / `postinstall` / `prepare` / `install` 钩子；`git+https://`、`.tar.gz`/`.whl`/`.zip` 直链；`cmdclass` / `setup_requires` 构建期执行；`plugin.toml` 缺 `id`/`name`/`version`/`entry`；`package.json` 缺 `license`/`repository`。
 计分：**不计入 100 分**，单独一栏输出，`--json` 里是 `sec5`。缺字段是发布前置条件而不是漏洞，混进评分会让真正的密钥命中失去区分度。
 

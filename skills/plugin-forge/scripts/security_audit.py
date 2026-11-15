@@ -4,7 +4,7 @@
 
 用法
   python security_audit.py <repo路径> [--allow 相对路径前缀,...] [--include-docs]
-                           [--json] [--quiet]
+                           [--json] [--quiet] [--fail-unclear] [--strict-placeholder]
 
 四项计分检查 + 一项不计分提示（细则与评分规则见 references/security-checklist.md）
   SEC-1 路径范围：写/删操作指向项目外、敏感家目录，或残留个人绝对路径。
@@ -70,6 +70,17 @@ CODE_VALUE_RE = re.compile(r"""^(?:
   | (?i:true|false|null|none|undefined)   # 字面量关键字
 )$""", re.X)
 IGNORE_VAL = re.compile(r"(?i)^(?:your[_-]|(?:changeme|placeholder|example|dummy|sample|test|fake|redacted|masked|todo|noreply|none|null|empty)(?![A-Za-z])|x{3,}|\*{3,}|<|\$\{|\{|\[)")
+# 严格档只改一处：占位词后面跟数字也算真值。默认档会把 example1234567、test123456、
+# fake9876543 当占位符吃掉，而这类写法在真实泄漏里不少见。代价是文档示例值会开始报，
+# 所以默认不开，由 --strict-placeholder 打开。
+IGNORE_VAL_STRICT = re.compile(r"(?i)^(?:your[_-]|(?:changeme|placeholder|example|dummy|sample|test|fake|redacted|masked|todo|noreply|none|null|empty)(?![A-Za-z0-9])|x{3,}|\*{3,}|<|\$\{|\{|\[)")
+STRICT_PLACEHOLDER = False
+
+
+def is_placeholder(val):
+    """占位符判定，严格档由 --strict-placeholder 切换。"""
+    pat = IGNORE_VAL_STRICT if STRICT_PLACEHOLDER else IGNORE_VAL
+    return bool(pat.match(val))
 SEC3 = [
     (r"(?<![\w.])(?:eval|exec)\s*\(", "eval/exec 动态执行"),
     (r"shell\s*=\s*True", "subprocess shell=True"),
@@ -117,7 +128,7 @@ def secret_assignments(line):
         key, val = m.group(1), m.group(2)
         if line[m.end(2):m.end(2) + 1] == "(":
             continue          # 右侧是函数调用，不是字面量（本文件自己就有一行）
-        if IGNORE_VAL.match(val) or CODE_VALUE_RE.match(val):
+        if is_placeholder(val) or CODE_VALUE_RE.match(val):
             continue
         vlow, klow = val.lower(), key.lower()
         if vlow == klow or vlow == klow.rsplit(".", 1)[-1]:
@@ -174,10 +185,31 @@ def manifest_gaps(rel, text):
             if isinstance(data, dict) and field not in data:
                 out.append(("package.json 缺 %s 字段" % field, 1))
     elif name == "plugin.toml":
+        have = plugin_toml_keys(text)
         for key in ("id", "name", "version", "entry"):
-            if not re.search(r"^\s*%s\s*=" % key, text, re.M):
-                out.append(("plugin.toml 缺必填 %s" % key, 1))
+            if key not in have:
+                out.append(("plugin.toml 的 [plugin] 段缺必填 %s" % key, 1))
     return out
+
+
+def plugin_toml_keys(text):
+    """只取 [plugin] 段顶层的键。全文扫键会两头出错：`[plugin_runtime]` 里的同名键会
+    掩盖顶层缺项，别的段里的键也会被当成已填。不引第三方 TOML，只做本节需要的分行扫描。
+    """
+    keys, inside = set(), False
+    for line in text.split("\n"):
+        s = line.strip()
+        if not s or s.startswith("#"):
+            continue
+        if s.startswith("["):
+            head = re.match(r"^\[\s*([^\]]+?)\s*\]", s)
+            inside = bool(head) and head.group(1).strip().lower() == "plugin"
+            continue
+        if inside:
+            m = re.match(r"([A-Za-z0-9_-]+)\s*=", s)
+            if m:
+                keys.add(m.group(1).lower())
+    return keys
 
 
 def _utf8():
@@ -270,7 +302,7 @@ def scan(root, include_docs, allow):
             for cid, table in TABLES:
                 for pat, note in table:
                     for mo in re.finditer(pat, line):
-                        if cid == "SEC-2" and IGNORE_VAL.match(mo.group(1) if mo.groups() else mo.group(0)):
+                        if cid == "SEC-2" and is_placeholder(mo.group(1) if mo.groups() else mo.group(0)):
                             continue
                         key = (rel, i, cid, note)
                         if key in seen:
@@ -317,7 +349,7 @@ def _self_test():
                 if cid != "SEC-2":
                     return True
                 v = mo.group(1) if mo.groups() else mo.group(0)
-                if not IGNORE_VAL.match(v):
+                if not is_placeholder(v):
                     return True
         if cid == "SEC-2" and secret_assignments(line):
             return True
@@ -408,6 +440,24 @@ def _self_test():
         helper_bad.append("超大文件应算真盲区")
     if len(manifest_gaps("package.json", '{"name":"x"}')) < 2:
         helper_bad.append("package.json 缺 license/repository 没报出来")
+    # plugin.toml 必填要按节判定：子段里的同名键不能顶掉顶层缺项
+    nested = "[plugin]\nid = \"a\"\nname = \"n\"\nversion = \"1.0.0\"\n\n[plugin_runtime]\nentry = 1\n"
+    if not any("entry" in m for m, _l in manifest_gaps("plugin.toml", nested)):
+        helper_bad.append("[plugin] 缺 entry 被子段同名键掩盖，没报出来")
+    complete = "[plugin]\nid = \"a\"\nname = \"n\"\nversion = \"1.0.0\"\nentry = \"m:C\"\n"
+    if manifest_gaps("plugin.toml", complete):
+        helper_bad.append("字段齐全的 plugin.toml 被误报")
+    # 占位符两档：默认吃掉 example1234567，严格档要放行
+    global STRICT_PLACEHOLDER
+    STRICT_PLACEHOLDER = False
+    if not is_placeholder("exam" + "ple1234567"):
+        helper_bad.append("默认档应把 example1234567 当占位符")
+    STRICT_PLACEHOLDER = True
+    if is_placeholder("exam" + "ple1234567"):
+        helper_bad.append("严格档不应再把 example1234567 当占位符")
+    if not is_placeholder("exam" + "ple_key"):
+        helper_bad.append("严格档仍应把 example_key 这类明显示例当占位符")
+    STRICT_PLACEHOLDER = False
     if manifest_gaps("package.json", '{"license":"MIT","repository":{}}'):
         helper_bad.append("字段齐全却被 SEC-5 误报")
     for msg in helper_bad:
@@ -416,7 +466,7 @@ def _self_test():
     bad = [c for c in cases if hit(c[0], c[1]) != c[2]]
     for cid, line, want in bad:
         print("SELF-TEST FAIL: %s want=%s got=%s %r" % (cid, want, hit(cid, line), line))
-    n = len(cases) + len(sec5_cases) + len(extra) + 5
+    n = len(cases) + len(sec5_cases) + len(extra) + 11
     ok = not (bad or s5_bad or e_bad or helper_bad)
     print("SEC-1/2/5 + 边界自检: %s（%d 例）" % ("PASS" if ok else "FAIL", n))
     return 0 if ok else 1
@@ -433,7 +483,11 @@ def main():
     ap.add_argument("--self-test", action="store_true", help="内置自检（CI 用）")
     ap.add_argument("--fail-unclear", action="store_true",
                     help="有盲区（未读文件或疑似压缩）时把放行改成退出码 3=不确定，供 CI 用")
+    ap.add_argument("--strict-placeholder", action="store_true",
+                    help="占位词后跟数字也算真值：example1234567 一类不再被吃掉，文档示例会开始报")
     args = ap.parse_args()
+    global STRICT_PLACEHOLDER
+    STRICT_PLACEHOLDER = bool(getattr(args, "strict_placeholder", False))
     if args.self_test:
         return _self_test()
     root = os.path.abspath(args.repo)
