@@ -15,7 +15,9 @@
         "plugins",
         "multi-agent",
         "contract-first",
-        "anti-slop"
+        "ste100",
+        "anti-slop",
+        "neko"
       ]
     }
   ]

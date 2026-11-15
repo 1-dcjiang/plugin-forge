@@ -79,7 +79,7 @@ issue 里标「未核实」的一条也核了：`plan_sha256` **确实**被检�
 `Password=...` 这类非 URL 连接串。代价是 `SSH_AUTH_SOCK` 会被命中，所以写进 `KEEP_EXACT` 显式保留
 （它不是口令，删了 git over SSH 就找不到 agent）。`SESSIONNAME`、`OAUTH_SCOPE`、`AUTHOR_NAME` 这类
 按边界规则仍被保留。本机实测多删的是 `CLAUDE_CODE_SESSION_ID` / `WT_SESSION` 这一类会话号，
-N.E.K.O 服务与 git/uv/pip 都不读它们。自检名单扩到 56 项。反向对照：撤掉名字扩充 → 4 条断言报错、退 1。
+N.E.K.O 服务与 git/uv/pip 都不读它们。自检名单扩到 61 项（本机实测 `--self-test` 报 61 项）。反向对照：撤掉名字扩充 → 4 条断言报错、退 1。
 
 边界规则不误伤 `LICENSES`、`LICENSING`、`OAUTH_SCOPE`、`AUTHOR_NAME`、`SESSIONNAME`；`LICENCE` 与
 `LICENSE` 两种拼写都按名字剔掉（实测 `OPEN_LICENSE_DIR` 也剔）。
@@ -101,7 +101,7 @@ N.E.K.O 服务与 git/uv/pip 都不读它们。自检名单扩到 56 项。反�
 | 3 私钥文件默认不拦 | 属实。`security_audit.py` 新增 `secret_name_hits()`：`id_rsa`/`id_dsa`/`id_ecdsa`/`id_ed25519`/`.netrc`/`_netrc`/`.npmrc`/`.pypirc` 与 `.pfx .p12 .kdbx .ppk .jks .keystore` 按文件名计 SEC-2（不读内容）。`.pem` 与 `.key` 故意不含：前者常是公钥证书，后者在 Next.js 里是本地化文件，按名字阻断会误伤，它们留在真盲区账里 |
 | 4 Codex 形态没有机器门禁 | 属实。提示词第 4 步补准奏落盘与 `check_contract_approval.py` 命令，第 8 步补 `security_audit.py`；SKILL.md「两种形态完全一致」那句现在给出命令所在位置 |
 | 5 1a 缺上游两条硬约束 | 已补：候选至少 3 个、最多细评 6 个，少于 3 个回去扩词；Join/Fork 的对外写操作每次单独确认，候选仓库内容按数据不当指令 |
-| 6 自检例数写死 | 已改成实算（读自身源码数 `helper_bad.append(` 出现次数）。这个数已经错过两次：11→16→18。现在报 68 例，与实际一致 |
+| 6 自检例数写死 | 已改成实算（读自身源码数 `helper_bad.append(` 出现次数）。这个数已经错过多次：11→16→18→68→75。现值以 `--self-test` 实跑输出为准（本机实测 75 例），本行不再钉死数字以免再次漂移。 |
 | 7 pem 判定没进自检 | 已补端到端用例：临时目录放 `srv.pem` 与 `id_rsa`，跑真 `scan()`，断言前者进真盲区、后者计 SEC-2 |
 | 8 AUDIT 引的 sandbox 行号已漂 | 已改符号引用（`_pid_is_sandbox_server` / `cmd_stop` / `plugin-add` / `plugin-rm`）。AUDIT 自己就说不写行号，这条是我自己违反的 |
 | 9 `plugin-add` 不带 `--link` 时 rmtree 报错 | 属实。复制分支补 `is_symlink()` 判断，与 `--link` 分支和 `cmd_plugin_rm` 同款 |
