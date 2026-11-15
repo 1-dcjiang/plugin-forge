@@ -5,7 +5,8 @@
 ## 1. 源码仓库
 - **仓库**：https://github.com/Project-N-E-K-O/N.E.K.O
 - **定位**：开源"伙伴 Agent（Companion Agents）"及养育社区；实时语音/视觉、长期记忆、Live2D/3D Avatar、游戏伴侣、社交互访、插件市场。
-- **技术栈**：Python（FastAPI、`uv` 管理依赖，`main_logic/`、`brain/`、`config/`）+ React/TypeScript 前端；Live2D / VRM / MMD / PNGTuber；LiveKit / TRTC；Docker / Nginx。
+- **技术栈**：Python（FastAPI、`uv` 管理依赖，顶层 `plugin/`、`app/`、`nekoclaw/`、`main_logic/`、`config/`）+ React/TypeScript 前端；Live2D / VRM / MMD / PNGTuber；LiveKit / TRTC；Docker / Nginx。
+  顶层目录清单读于 main `a222e50`（2026-11-15）。旧文档常提的 `brain/` 在该提交已不在仓库根，`nekoclaw/` 已在；引用包路径前先列一次根目录。
 - **与插件相关**：
   - `plugin/` 目录（插件代码与 FastAPI 挂载点，须扫描并挂载门禁）
   - 环境变量：`PLUGIN_CONFIG_ROOT`、`PLUGIN_PACKAGES_ROOT`、`PACKAGE_PROFILES_ROOT`
