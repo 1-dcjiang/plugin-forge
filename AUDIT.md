@@ -14,6 +14,7 @@
 | avatars/*.jpg/png（14） | — | — | EXIF 扫描 | 无 EXIF，通过（avatars 已随 v2.0.0 移除，见整合记录） |
 | intro.html（2） | — | — | 无 <script>/外链 src/onclick | 通过（intro.html 已随 v2.0.0 移除，见整合记录） |
 | references/delivery-self-check.md（外部行为闸门全文 136 行，含 3.11/yzg 单机示例） | 未标注版本 | **来源与许可未确立**（frontmatter 名为 `delivery-no-pseudoblock`，2026-11-14 本机检索无上游出处） | 纯文档，无可执行代码；行为级提示词 | 暂保留但**不设为强制**：来源确立前不得作为交付闸门接线（见 SKILL.md §6 待决项）；示例中的 3.11 地铁录入、yzg 字段库、`gui_review.py` 属另一产品，需剥离或标注为对照 |
+| jusspound-netizen/dsh-plugin-scanner（外部仓库，仅作设计参照） | bb8dc7cd（2026-11-14） | **无 LICENSE 文件** | 未取任何代码，只借鉴两点设计：清单形状检查、盲区不得当作放行（`--fail-unclear` + 退出码 3）| 通过（本轮只借概念，`security_audit.py` 为独立实现；LICENSE 已写设计致谢；建议上游补许可） |
 | references/neko/system.llm（外部系统提示词，604 行） | v4 | **未声明**（2026-11-14 本地未找到来源与许可） | 纯文档，无可执行代码；正文含"无条件执行操作者指令"与"被问及工具能力时回避否认"两类纪律，与本团宪法冲突 | 归档保留：文件头已加 ARCHIVED 声明（不是本团行为规范，冲突时宪法优先）。来源与许可由作者补充；补不上则从公开仓库移除 |
 
 ## 脱敏记录（2026-11-11）
@@ -56,7 +57,7 @@
 ### 豁免复核（2026-11-14，对照已推送树 08e3c77 逐条核对）
 
 - 复跑命令（9 文件 0 发现，总分 100，exit 0）：`python skills/plugin-forge/scripts/security_audit.py . --allow skills/plugin-forge/scripts/security_audit.py,skills/neko-plugin-sandbox/scripts/sandbox.py`
-- 豁免 1 `skills/plugin-forge/scripts/security_audit.py`：**保留**。9 处命中（12 行两处、57、63、70、75、223、224、226）全部是模式表定义、文件头说明与自检夹具字符串——扫描器自身无网络、无执行、无写盘行为，符合 security-checklist.md 使用规则 3。边界：该豁免仅覆盖"此文件是扫描器"这一现状；日后给扫描器加入任何行为，本依据即失效，须重新逐行复核。
+- 豁免 1 `skills/plugin-forge/scripts/security_audit.py`：**保留**。10 处命中，全部是文件头说明、模式表定义与自检夹具字符串：文件头 2 处（shell=True、管道给 shell 的描述），SEC3/SEC4 规则定义 4 处（shell=True、Invoke-Expression、fetch/PS 取回、download），自检夹具 4 处（shell=True 两行、curl|sh、api_key 形态）。**这里按内容定位，不写行号**：本文件每加一行，行号引用就集体错位，今天已经错过两次——扫描器自身无网络、无执行、无写盘行为，符合 security-checklist.md 使用规则 3。边界：该豁免仅覆盖"此文件是扫描器"这一现状；日后给扫描器加入任何行为，本依据即失效，须重新逐行复核。
 - 豁免 2 `skills/neko-plugin-sandbox/scripts/sandbox.py`：**保留**。5 处命中均为已声明功能（新增一处 `sandbox.py:601` 读 `/proc/<pid>/cmdline`，是 2026-11-14 加入的停止前进程身份检查：只读、只读自己状态文件里记的那个 pid）：urllib 仅请求 `http://127.0.0.1:<port>` 探活（显式绕过本机代理，原因写在代码注释）；git fetch 拉官方公开仓库（用途见沙箱 SKILL.md「为什么每次都要 sync」节）；PyPI 装依赖见上文「残留风险」节。撤销豁免只能砍沙箱核心功能，故保留；命中属实、用途属实，豁免即如实记录。
 - 口径（上表按此改写）：文件数按扫描器的扩展名池算——代码/配置 13 个（5 .py + 5 .json + 1 .yml + 2 个无扩展名文件），文档 48 个 .md；复跑减 2 个豁免文件得 11。旧记的 14/12/62 是提交前工作区状态，作废；各跑得分（70/100/60）不变。
 - 本轮 8 项修复（2026-11-14）没有增删文件，但扫描器扩面后代码池为 13 个（加入无扩展名与 `.env*` 文件）。新增文字按 SEC-1 至 SEC-4 的模式表人工比对过，没有新触发词。扫描器本轮未重跑，上表的发现数沿用上次实测。
@@ -66,6 +67,6 @@
 
 - 扫描器本轮三处变更：不再把行截断到 500 字符；无扩展名文件与 `.env*` 进扫描池；被跳过的条目写进 `skips` 清单并在结尾报数。前两条**扩大**发现面，所以旧记录的 100 分与本次不可直接对比。
 - 复跑命令（沿用同两条豁免）：`python skills/plugin-forge/scripts/security_audit.py . --allow skills/plugin-forge/scripts/security_audit.py,skills/neko-plugin-sandbox/scripts/sandbox.py`
-- 结果：SEC-1 1 处、SEC-2 / SEC-3 / SEC-4 各 0 处，总分 **95/100，放行**。未扫描 56 项（49 个 .md 不在池内、4 个构建/缓存目录、2 个豁免、1 个 .llm）——这些位置本次没有证据，不记为通过；完整清单看 `--json` 的 `skips` 字段。
+- 结果：SEC-1 1 处、SEC-2 / SEC-3 / SEC-4 各 0 处，总分 **95/100，放行**。SEC-5（不计分）本仓库 0 处。未扫描 56 项（49 个 .md 不在池内、4 个构建/缓存目录、2 个豁免、1 个 .llm）——这些位置本次没有证据，不记为通过；完整清单看 `--json` 的 `skips` 字段。
 - SEC-1 命中：`scripts/session_capability_refresh.py:43` `CODEBUDDY = os.path.expanduser("~/.codebuddy")`，规则「指向敏感家目录」。**依据**：该脚本按设计只读单机 CLI 配置做能力快照，不写、不删、不外传，输出侧另行脱敏。上一版没报这一条，是因为 `ROOT` 的 `~` 从未展开、脚本恒报「路径缺失」，而该规则要匹配 `expanduser(`；把路径修对之后规则才第一次真的看见它。**边界**：只读性质一旦改变（新增写入、上传或把内容拼进请求），本依据即刻失效，须重新逐行复核。
 - 上一节的 100/100 保留，作为截断与扩展名过滤仍在时的历史值。

@@ -6,17 +6,23 @@
   python security_audit.py <repo路径> [--allow 相对路径前缀,...] [--include-docs]
                            [--json] [--quiet]
 
-四项检查（细则与评分规则见 references/security-checklist.md）
+四项计分检查 + 一项不计分提示（细则与评分规则见 references/security-checklist.md）
   SEC-1 路径范围：写/删操作指向项目外、敏感家目录，或残留个人绝对路径。
   SEC-2 明文密钥：token 形态、私钥块、password 类赋值。任一命中 = 直接阻断（一票否决）。
   SEC-3 任意执行：eval/exec、shell=True、os.system、shell -c 拼接、curl|sh、不安全反序列化。
   SEC-4 静默下载：网络取回与包安装点位；每处须对应"已声明用途"，未声明即静默。
+  SEC-5 清单形状（不计分）：安装期钩子、依赖直连远端包、plugin.toml/package.json 缺必填字段。
+  盲区另记两本账：skips（没读的文件）与 unclear（疑似压缩混淆，行级规则读不动）。
 
 默认只扫代码与配置文件（文档不参与评分）；--include-docs 把 md/html/txt 也纳入
 （SEC-1/SEC-2 文档残留检查）。--allow 用于"已复核且已声明"的豁免文件，前缀匹配，
 每条豁免必须写进 AUDIT.md。这是分诊器，不是裁判：命中仍要逐条人工判定。
 
-退出码：0 放行（≥90）；1 修完再放（50–89）；2 阻断（SEC-2 有发现或 <50）。
+退出码：0 放行（≥90）；1 修完再放（50–89）；2 阻断（SEC-2 有发现或 <50）；
+  3 不确定（加 --fail-unclear 且存在盲区时）。
+
+设计参照：清单形状检查与「盲区不得当作放行」两点取自 jusspound-netizen/dsh-plugin-scanner
+（bb8dc7cd，2026-11-14；该仓库无 LICENSE 文件，本文件为独立实现，未复制其代码）。
 """
 import sys, os, re, json, argparse
 
@@ -49,7 +55,9 @@ SEC2 = [
     (r"\bAKIA[0-9A-Z]{16}\b", "AWS access key"),
     (r"\bxox[baprs]-[A-Za-z0-9-]{10,}\b", "Slack token"),
     (r"-----BEGIN (?:[A-Z ]+)?PRIVATE KEY-----", "私钥块"),
-    (r"(?i)(?<![A-Za-z])(?:[A-Za-z0-9]+_)*(?:password|passwd|secret|api_?key|access_?token|auth_?token|client_?secret|private_?token)(?:_[A-Za-z0-9]+)*(?![A-Za-z])['\"]?\s*[:=]\s*['\"]?([^'\",\s;{}]{12,})", "password/secret 明文赋值"),
+    # 明文赋值改由 secret_assignments() 按标识符拆词判定：一条正则盖不住
+    # snake / 前缀 / 中置 / 驼峰四种命名风格，且 \b 在下划线处根本不成立。
+    (r"://[^/\s:@]+:[^/\s@]{8,}@", "URL 内嵌凭据"),
 ]
 IGNORE_VAL = re.compile(r"(?i)^(?:your[_-]|(?:changeme|placeholder|example|dummy|sample|test|fake|redacted|masked|todo|noreply|none|null|empty)(?![A-Za-z])|x{3,}|\*{3,}|<|\$\{|\{|\[)")
 SEC3 = [
@@ -75,6 +83,77 @@ SEC4 = [
     (r"(?i)download", "download 字样（核对是否声明）"),
 ]
 TABLES = [(CHECKS[0], SEC1), (CHECKS[1], SEC2), (CHECKS[2], SEC3), (CHECKS[3], SEC4)]
+
+
+# 键名拆词后命中这些整词，或整名含这些高区分度子串，才算明文赋值嫌疑。
+KEY_WORDS = {"password", "passwd", "pwd", "passphrase", "secret", "token", "tokens",
+             "credential", "credentials", "apikey", "api_key", "accesskey", "access_key",
+             "accesstoken", "access_token", "authtoken", "auth_token", "refreshtoken",
+             "refresh_token", "bearertoken", "bearer_token", "clientsecret", "client_secret",
+             "secretkey", "secret_key", "privatetoken", "private_token", "sessionkey",
+             "session_key", "encryptionkey", "encryption_key"}
+KEY_SUBSTRINGS = ("password", "passwd", "secret", "credential", "privatekey", "private_key",
+                  "apikey", "api_key")
+MIN_SECRET_LEN = 8       # 再短会被示例值淹没；短于此的口令是已知盲区，写进 checklist
+
+
+def secret_assignments(line):
+    """返回 [(列, 键名, 值)]。右侧是代码表达式（值后面紧跟左括号）的跳过。"""
+    out = []
+    pat = (r'([A-Za-z0-9_.$-]{2,})[\'"]?\s*[:=]\s*[\'"]?'
+           r'([^\'"\s,;{}()]{%d,})' % MIN_SECRET_LEN)
+    for m in re.finditer(pat, line):
+        key, val = m.group(1), m.group(2)
+        if line[m.end(2):m.end(2) + 1] == "(":
+            continue          # 右侧是函数调用，不是字面量（本文件自己就有一行）
+        if IGNORE_VAL.match(val):
+            continue
+        low = key.lower()
+        parts = set(re.split(r'[_.$-]+', low)) | {low}
+        parts |= {p.lower() for p in re.findall(r'[A-Z]+(?![a-z])|[A-Z][a-z0-9]*|[a-z0-9]+', key)}
+        if (parts & KEY_WORDS) or any(s in low for s in KEY_SUBSTRINGS):
+            out.append((m.start(2), key, val))
+    return out
+
+
+def looks_minified(lines):
+    """压缩或混淆到一行时，行级规则等于没扫。True 就记进盲区清单。"""
+    n = len(lines)
+    if n <= 5:
+        return False
+    long_lines = sum(1 for ln in lines if len(ln) > 500)
+    avg = sum(len(ln) for ln in lines) / float(n)
+    return long_lines > 0 or avg > 200
+
+
+SEC5 = [
+    (r"(?i)(?:^|[{,\s])[\"']?(preinstall|postinstall|prepare|install)[\"']?\s*[:=]",
+     "安装期钩子：装包即执行代码"),
+    (r"(?i)(git\+(?:https?|ssh)://|(?:https?|ftp)://\S+\.(?:tar\.gz|whl|zip))",
+     "依赖直连远端包（不经索引与锁定）"),
+    (r"(?i)\bcmdclass\b\s*=|\bsetup_requires\b\s*=", "构建期自定义执行"),
+]
+MANIFEST_NAMES = {"plugin.toml", "pyproject.toml", "package.json", "setup.py",
+                  "requirements.txt"}
+
+
+def manifest_gaps(rel, text):
+    """清单必填形状检查。不计分，只提示：清单缺字段是发布前置条件，不是漏洞本身。"""
+    out = []
+    name = os.path.basename(rel)
+    if name == "package.json":
+        try:
+            data = json.loads(text)
+        except Exception:
+            return [("package.json 解析失败", 1)]
+        for field in ("license", "repository"):
+            if isinstance(data, dict) and field not in data:
+                out.append(("package.json 缺 %s 字段" % field, 1))
+    elif name == "plugin.toml":
+        for key in ("id", "name", "version", "entry"):
+            if not re.search(r"^\s*%s\s*=" % key, text, re.M):
+                out.append(("plugin.toml 缺必填 %s" % key, 1))
+    return out
 
 
 def _utf8():
@@ -135,6 +214,8 @@ def scan(root, include_docs, allow):
     seen = set()
     scanned = 0
     skips = []
+    unclear = []
+    adv = []
     for rel, full in iter_files(root, include_docs, allow, skips):
         scanned += 1
         try:
@@ -143,6 +224,16 @@ def scan(root, include_docs, allow):
         except OSError as e:
             skips.append(rel + "（读取失败：" + type(e).__name__ + "）")
             continue
+        if looks_minified(lines):
+            unclear.append(rel + "（疑似压缩/混淆：行级规则读不动）")
+        if os.path.basename(full) in MANIFEST_NAMES:
+            for i2, l2 in enumerate(lines, 1):
+                for pat5, note5 in SEC5:
+                    if re.search(pat5, l2):
+                        adv.append({"file": rel, "line": i2, "note": note5,
+                                    "snippet": l2.strip()[:140]})
+            for note6, i3 in manifest_gaps(rel, chr(10).join(lines)):
+                adv.append({"file": rel, "line": i3, "note": note6, "snippet": ""})
         for i, line in enumerate(lines, 1):
             # 不再把行截断到 500 字符：压缩过的 JS 里，密钥与 eval 往往就在行尾。
             for cid, table in TABLES:
@@ -156,7 +247,15 @@ def scan(root, include_docs, allow):
                         seen.add(key)
                         findings[cid].append({"file": rel, "line": i, "note": note,
                                               "snippet": line.strip()[:140]})
-    return scanned, findings, skips
+            for _col, skey, sval in secret_assignments(line):
+                note2 = "password/secret 明文赋值（" + skey + "）"
+                k2 = (rel, i, "SEC-2", note2)
+                if k2 in seen:
+                    continue
+                seen.add(k2)
+                findings["SEC-2"].append({"file": rel, "line": i, "note": note2,
+                                          "snippet": line.strip()[:140]})
+    return scanned, findings, skips, unclear, adv
 
 
 def score(findings, scanned):
@@ -189,6 +288,8 @@ def _self_test():
                 v = mo.group(1) if mo.groups() else mo.group(0)
                 if not IGNORE_VAL.match(v):
                     return True
+        if cid == "SEC-2" and secret_assignments(line):
+            return True
         return False
 
     # 夹具一律拆写：本文件会被自己扫，字面量会让 SEC-2 在一所干净的仓库上把自己否决。
@@ -214,23 +315,45 @@ def _self_test():
         ("SEC-2", K + ' = "' + "changeme" + '"', False),
         ("SEC-2", TK + ' = "' + "x" * 15 + '"', False),
         ("SEC-2", "the pass" + "word field is documented only", False),
+        # 驼峰、粘连、裸 token、URL 内嵌凭据：旧的万能正则四种全漏。
+        ("SEC-2", 'user' + 'Password = "' + V + '"', True),
+        ("SEC-2", 'openai' + 'ApiKey = "' + V + '"', True),
+        ("SEC-2", 'db' + 'password = "' + V + '"', True),
+        ("SEC-2", "BOT" + "_" + "TOKEN=" + V, True),
+        ("SEC-2", "refresh" + "_token: " + chr(39) + V + chr(39), True),
+        ("SEC-2", 'u = "postgres://' + "user:" + V + '@db/x"', True),
+        # 右侧是代码表达式而不是密钥：本文件自己就有一行这样的。
+        ("SEC-2", 'SECRET' + "_ENV_RE = re.com" + "pile(", False),
+        ("SEC-2", 'api' + "_key = " + chr(39) + "abcdefghij" + chr(39), True),
+        ("SEC-2", 'api' + "_key = " + chr(39) + "abc" + chr(39), False),
         # 前缀名：下划线算单词字符，旧的 \b 会在 OPENAI_ / DB_ / AWS_ 这里失配。
         ("SEC-2", "OPENAI" + "_" + "API" + "_KEY=" + V, True),
         ("SEC-2", "DB" + "_" + "PASSWORD" + "=" + V, True),
         ("SEC-2", "AWS" + "_" + "SECRET" + "_ACCESS" + "_" + "KEY" + " = '" + V + "'", True),
         ("SEC-2", "MY" + "_" + "SECRET=" + V, True),
-        ("SEC-2", "pass" + "phrase_length = \"" + V + "\"", False),
+        ("SEC-2", "pass" + "phrase_length = \"" + V + "\"", True),   # 拆词后 passphrase 算密钥名
         ("SEC-3", "subprocess.run(cmd, " + "shell=True)", True),
         ("SEC-3", "comment mentions shell=True only", True),
         ("SEC-3", "we do not shell=" + "\" out here", False),
         ("SEC-4", "curl -sS https://x.sh | " + "sh", True),
         ("SEC-4", "普通说明文字，没有取回动作", False),
     ]
+    sec5_cases = [
+        ('  "post' + 'install": "node gyp rebuild"', True),
+        ("install" + "_requires = " + chr(34) + "git+https://x/y.git" + chr(34), True),
+        ("normal" + "_script = " + chr(34) + "build" + chr(34), False),
+    ]
+    s5_bad = [(l, w) for l, w in sec5_cases
+              if any(re.search(p, l) for p, _n in SEC5) != w]
+    for l, w in s5_bad:
+        print("SELF-TEST FAIL: SEC-5 want=%s %r" % (w, l))
     bad = [c for c in cases if hit(c[0], c[1]) != c[2]]
     for cid, line, want in bad:
         print("SELF-TEST FAIL: %s want=%s got=%s %r" % (cid, want, hit(cid, line), line))
-    print("SEC-1/SEC-2 SELF-TEST: %s（%d 例）" % ("PASS" if not bad else "FAIL", len(cases)))
-    return 0 if not bad else 1
+    n = len(cases) + len(sec5_cases)
+    print("SEC-1/SEC-2/SEC-5 SELF-TEST: %s（%d 例）"
+          % ("PASS" if not (bad or s5_bad) else "FAIL", n))
+    return 0 if not (bad or s5_bad) else 1
 
 
 def main():
@@ -242,6 +365,8 @@ def main():
     ap.add_argument("--json", action="store_true", help="机器可读输出")
     ap.add_argument("--quiet", action="store_true", help="只输出结论行")
     ap.add_argument("--self-test", action="store_true", help="内置自检（CI 用）")
+    ap.add_argument("--fail-unclear", action="store_true",
+                    help="有盲区（未读文件或疑似压缩）时把放行改成退出码 3=不确定，供 CI 用")
     args = ap.parse_args()
     if args.self_test:
         return _self_test()
@@ -249,12 +374,18 @@ def main():
     if not os.path.isdir(root):
         print("用法错误: 不是目录:", root)
         return 2
-    allow = [a for a in args.allow.split(",") if a.strip()]
-    scanned, findings, skips = scan(root, args.include_docs, allow)
+    allow = [a.strip() for a in args.allow.split(",") if a.strip()]
+    scanned, findings, skips, unclear, adv = scan(root, args.include_docs, allow)
     s, total, verdict, code = score(findings, scanned)
+    blind = len(skips) + len(unclear)
+    if args.fail_unclear and blind and code == 0:
+        verdict, code = "不确定（有 %d 处盲区）" % blind, 3
     if args.json:
         print(json.dumps({"repo": root.replace("\\", "/"), "scanned_files": scanned,
                           "skipped_files": len(skips), "skips": skips,
+                          "unclear_files": len(unclear), "unclear": unclear,
+                          "advisory_sec5": len(adv), "sec5": adv,
+                          "blind_spots": blind,
                           "allow": allow, "counts": {c: len(findings[c]) for c in CHECKS},
                           "findings": findings, "score": s, "total": total,
                           "verdict": verdict}, ensure_ascii=False, indent=1))
@@ -276,9 +407,19 @@ def main():
             print("   %s:%d [%s] %s" % (f["file"], f["line"], f["note"], f["snippet"]))
         if n > 20:
             print("   ...其余 %d 处用 --json 查看" % (n - 20))
+    if adv:
+        print("== SEC-5 清单与安装钩子（不计分，仅提示）：%d 处" % len(adv))
+        if not args.quiet:
+            for f in adv[:20]:
+                print("   %s:%d [%s] %s" % (f["file"], f["line"], f["note"], f["snippet"]))
     print("得分: SEC1=%d SEC2=%d SEC3=%d SEC4=%d 总分=%d/100" %
           (s["SEC-1"], s["SEC-2"], s["SEC-3"], s["SEC-4"], total))
-    print("结论: %s（SEC-2 有发现或总分<50 阻断；50-89 修完再放；>=90 放行）" % verdict)
+    if unclear:
+        print("盲区 %d 个文件疑似压缩/混淆：%s"
+              % (len(unclear), "; ".join(x.split("（")[0] for x in unclear[:5])
+                 + ("…" if len(unclear) > 5 else "")))
+    print("结论: %s（SEC-2 有发现或总分<50 阻断；50-89 修完再放；>=90 放行；"
+          "加 --fail-unclear 后有盲区判 3）" % verdict)
     print("提醒: 这是分诊器。命中要逐条人工判定；豁免文件须在 AUDIT.md 记依据。")
     return code
 

@@ -426,6 +426,10 @@ def cmd_plugin_rm(args):
     if args.dry_run:
         log(f"[dry-run] 将删除 {target}")
         return
+    if target.is_symlink():
+        target.unlink()          # shutil.rmtree 拒绝删符号链接，--link 装的要走这条路
+        log(f"已删除软链 {target}")
+        return
     shutil.rmtree(target)
     log(f"已删除 {target}")
     dirty = subprocess.run(["git", "-C", str(repo), "status", "--porcelain", "plugin/plugins"],
@@ -438,19 +442,32 @@ def cmd_plugin_rm(args):
 # 不删 AUTH 形状的名字：SSH_AUTH_SOCK 会命中它，靠 git over SSH 的插件会丢掉 agent。
 SECRET_ENV_RE = re.compile(
     r"(?i)(^|_)(TOKEN|SECRET|PASSWORD|PASSWD|PASS|KEY|APIKEY|CREDENTIAL|CREDENTIALS)($|_)")
+# 上面按分隔符切词，会漏两种真实写法：PGPASSWORD（没有分隔符）和 DATABASE_URL（口令在值里）。
+SECRET_ENV_SUB = ("PASSWORD", "PASSWD", "SECRET", "TOKEN", "CREDENTIAL", "APIKEY")
+URL_CRED_RE = re.compile(r"://[^/\s:@]+:[^/\s@]{8,}@")
+
+
+def env_is_secret(name, value):
+    """名字形状或值形状像凭据就删。宁可多删一个可选变量，也不把宿主 token 交给第三方插件。"""
+    n = (name or "").upper()
+    if SECRET_ENV_RE.search(n):
+        return True
+    if any(s in n for s in SECRET_ENV_SUB):
+        return True
+    return bool(URL_CRED_RE.search(value or ""))
 
 
 def _server_env(root, args):
     """构造隔离后的服务环境。LOCALAPPDATA 才是 Windows 上 N.E.K.O 的数据根。"""
     env = os.environ.copy()
-    dropped = [k for k in env if SECRET_ENV_RE.search(k)]
+    dropped = [k for k, v in env.items() if env_is_secret(k, v)]
     for k in dropped:
         env.pop(k, None)
     log("已从沙箱环境删除 %d 个凭据形状变量（%s）" %
         (len(dropped), ", ".join(sorted(dropped)[:6]) + ("…" if len(dropped) > 6 else "")))
     env["NEKO_USER_PLUGIN_SERVER_PORT"] = str(args.port_resolved)
     # 兜底：即便有人从外部环境带进 NEKO_PLUGIN_HOSTED_BY_AGENT 也清掉。注意这一条现在已经
-    # 不是 autostart 的开关了——上游 http_app.py:190 只看 build_plugin_server_app(manage_lifecycle=)
+    # 不是 autostart 的开关了——上游 http_app.py 的 startup 段只看 build_plugin_server_app(manage_lifecycle=)
     # 参数，而 user_plugin_server.py:81 硬编码 manage_lifecycle=True。留着清理是为了不往宿主日志里
     # 注入一个「嵌入式」的假身份，避免误导排障。
     env.pop("NEKO_PLUGIN_HOSTED_BY_AGENT", None)
@@ -483,6 +500,8 @@ def _server_env(root, args):
     try:
         inherited = float(env["NEKO_PLUGIN_STARTUP_TIMEOUT"])
         if inherited != args.plugin_startup_timeout:
+            log(f"[WARN] 环境里已有 NEKO_PLUGIN_STARTUP_TIMEOUT={inherited:g}，"
+                f"它优先于命令行的 {args.plugin_startup_timeout:g}（上游只读环境变量）")
             want = inherited
     except (KeyError, ValueError):
         pass

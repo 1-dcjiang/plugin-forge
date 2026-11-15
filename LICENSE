@@ -32,3 +32,7 @@ Third-party attribution:
   until that is settled.
 - N.E.K.O is an Apache-2.0 project. This repository cites its routes, contracts and ports as
   verifiable facts and contains none of its source.
+- Design credit: jusspound-netizen/dsh-plugin-scanner (commit bb8dc7cd, 2026-11-14). Its ideas
+  of manifest-shape checks and of a fail-closed exit code for blind spots inspired
+  skills/plugin-forge/scripts/security_audit.py. That repository publishes no licence file, so
+  nothing was copied from it; the detector here is an independent implementation.

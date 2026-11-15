@@ -32,11 +32,11 @@ description: 基于 N.E.K.O 官方仓库搭建隔离的插件运行时沙箱：�
 |---|---|---|
 | 运行时入口 | `plugin/user_plugin_server.py` | 文件头 docstring：「Main entry point for the HTTP server」(L1-5) |
 | standalone 语义 | `build_plugin_server_app(manage_lifecycle=True)` —— 由它自己扫描并 autostart | `plugin/user_plugin_server.py:81`；该参数**默认是 `False`**（`http_app.py:268`），只有 standalone 入口传 `True` |
-| autostart 的实际开关 | `if manage_lifecycle: await lifecycle_startup()` —— **不看环境变量** | `plugin/server/http_app.py:190` |
+| autostart 的实际开关 | `if manage_lifecycle: await lifecycle_startup()` —— **不看环境变量** | `plugin/server/http_app.py`（startup 段的 `if manage_lifecycle:`） |
 | 端口 | `NEKO_USER_PLUGIN_SERVER_PORT`；上游默认 `USER_PLUGIN_SERVER_PORT=48916`；standalone 入口被占用时自己向后找（50 次）并回写该变量 | `config/network.py:193`；`user_plugin_server.py:173`、`:180`、`:184` |
 | 健康检查 | `GET /health` → `{"status": "ok", "time": <iso>}` | `plugin/server/routes/health.py:19-21` |
 | 插件源目录 | `plugin/plugins/<plugin_id>/`，含 `plugin.toml` 的 `[plugin] id` / `version`；内置根 = 仓库 `plugin/plugins` | `docs/plugins/cli.md`；`plugin/settings.py:69-71` |
-| 嵌入选址标志 | **已不再是开关**：`NEKO_PLUGIN_HOSTED_BY_AGENT` 只剩 agent_server 在写，`http_app.py` 无读取点；autostart 由上面那个参数决定 | `app/agent_server/api_runtime.py:817`（写）；`http_app.py:182-191`（注释明说早先读它会在 import 时冻结） |
+| 嵌入选址标志 | **已不再是开关**：`NEKO_PLUGIN_HOSTED_BY_AGENT` 只剩 agent_server 在写，`http_app.py` 无读取点；autostart 由上面那个参数决定 | `app/agent_server/api_runtime.py`（`NEKO_PLUGIN_HOSTED_BY_AGENT` 赋值处）；`http_app.py`（`manage_lifecycle` 上方注释明说早先读它会在 import 时冻结） |
 | **autostart 的额外前置** | 除上面参数外，还要同时满足：清单 `[plugin_runtime] auto_start = true`（**省略即 false**）、`runtime_enabled` 非 `False`、`runtime_load_state != "failed"`、`runtime_source_missing != True`、且 id 不在 `plugin_autostart_pending.json` 待审批集合里 | `plugin/core/registry.py:1290-1296`；`plugin/server/application/plugins/registry_service.py:1254-1276` |
 | Windows 事件循环 | 强制 `WindowsSelectorEventLoopPolicy`（在起 event loop 之前） | `user_plugin_server.py:59-74` |
 | CLI 能力 | `init / setup-repo / create-repo / sync / check / lint / precheck / build / install / analyze / publish`（**没有 run / validate / release / deps**） | `plugin/neko_plugin_cli/cli.py:105-113` + 各 `*_cmd.register` |

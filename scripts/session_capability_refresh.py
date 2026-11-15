@@ -42,6 +42,9 @@ def _safe(s, n=64):
 ROOT = os.path.expanduser("~/.workbuddy")
 CODEBUDDY = os.path.expanduser("~/.codebuddy")
 MKTS = ROOT + "/plugins/marketplaces"
+# 这里指安装态目录，不是已退役的仓库目录 neko-plugin-ops/（见 AUDIT.md 整合记录）。
+# 改指 skills/neko-plugin-sandbox 会让本项恒报 <MISSING>：那个目录没有 .codebuddy-plugin 清单。
+# BASELINE 同理是作者单机指纹（neko-sources.md 第 6 节标为「不得当跨机器结论」）。
 NEKO = MKTS + "/my-experts/plugins/neko-plugin-ops"
 HINDSIGHT = os.path.expanduser("~/.hindsight/coding-agents/dist")
 
