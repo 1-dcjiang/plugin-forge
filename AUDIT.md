@@ -337,6 +337,30 @@ DETACHED 那半个仍没覆盖：它只在 Windows 真起进程时才走得到�
 - 本仓扫描不变：仍 SEC-1 1 处、SEC-2 0 处、95/100 放行，没带来新误报。
 - 对下游同样是变严：Objective-C 与 C# 仓库里密钥名配 `@"..."` 的写法从此会被报出来。
 
+### 宿主真在跑时的第三轮实测（2026-11-17 07:20，Windows，用户的 N.E.K.O 桌面端在线）
+
+作者把宿主起好了。这一轮补两条以前只有读证的路，并且第一次在有真实第三方服务进程的机器上验守护。
+先记一件事实：装好的宿主跑的是 `E:\Program Files\Neko\resources\bin\projectneko_server.exe`，
+命令行里**没有** `user_plugin_server.py`。那个文件名只出现在源码 checkout 起的服务上。
+
+1. **`start` 那条路（DETACHED 分支）第一次真跑。** 沙箱根 `forge-sandbox-start`，挂 `neko_host` 的
+   `.venv`。15.5 秒就绪，`/health` 200，状态文件记 `mode=start` 与真服务 pid。
+2. **坑 #4 的说法被实测改正。** 父命令退出以后，那个 detached 服务**还活着**，端口照样应答。
+   旧句子写成「DETACHED_PROCESS 在 job object 下也救不了」，容易被读成「start 一律留不住进程」。
+   真实边界是：普通父进程退出挡得住，带 job object 的受管任务挡不住。SKILL.md 第 4 坑已按这句改。
+3. **`stop` 对 start 模式的服务。** 4.9 秒确认真的退出，删状态文件，事后 pid 查无、端口释放。
+4. **守护对着无害进程。** 拿一个 `python -c "time.sleep(600)"` 冒充沙箱服务写进状态文件。
+   `stop` 判成 pid 复用，不杀该进程，只清状态（1.0 秒）。再 `stop --force` 时状态文件已经没了，
+   退 2 报「未找到 sandbox.json」。无害进程全程存活，最后由测试自己收尾。
+5. **守护对着用户的真宿主。** 只读取数不动手：pid 71100（桌面端主服务）与 45924（其 fork 子进程）
+   的判定都是 `False`，走向算出来是 `reuse`，带上 `force=True` 也还是 `reuse`。
+   也就是说 `stop` 在这台机器上永远不会杀掉用户正在跑的 N.E.K.O。本轮没对那两个 pid 发过任何信号。
+
+顺带核对：这一轮 `serve` 与 `start` 两种模式下，沙箱读到的都是上游内置插件 11 个、只有 `web_search`
+在 running，用户已装插件没有被拉进来。宿主在线不影响隔离，因为数据根各自独立。
+
+沙箱根 `forge-sandbox-start` 与 `forge-sandbox-refuse` 留着，随时可整个删。
+
 ### 仍交回作者的一项
 
 `session_capability_refresh.py` 的两处死代码没动。改动本身各一行，但它牵连三件事：那个文件是每会话都跑的
