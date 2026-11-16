@@ -736,16 +736,113 @@ def stop_action(verdict, alive, force):
     return "kill" if force else "refuse"
 
 
-def _kill_pid(pid):
+KILL_WAIT = 3.0        # stop 发完信号后等多久算「真的停了」
+WAIT_STEPS = (0.2,) * 16          # POSIX：读 /proc 几乎免费，格子可以密
+NT_WAIT_STEPS = (0.4, 1.0, 2.0)   # Windows：一次探测要起一个 PowerShell，密格子纯属白等
+
+
+def _state_from_stat(text):
+    """从 /proc/<pid>/stat 里取进程状态那一个字符。
+
+    第二个字段是括号包住的命令名，名字里能带空格也能带括号，所以只能按最后一个 ") " 切。
+    Z = 已退出、父进程还没回收。它还占着 pid 目录，ps 也还列得出来，但对「服务停没停」
+    这个问句就是停了。不认这一条，SIGTERM 成功之后仍会读成「还活着」。
+    """
+    tail = text.rsplit(") ", 1)
+    if len(tail) < 2:
+        return None
+    parts = tail[1].split()
+    if not parts:
+        return None
+    state = parts[0]
+    # 状态只有一个字母（R S D Z T X）。形状不对就返回 None，让调用方退回 ps，
+    # 不要拿一个解析不出来的字段当结论。
+    return state if len(state) == 1 and state.isalpha() else None
+
+
+def _alive_from_state(state):
+    """把进程状态字符翻成「还在不在」。None = 认不出来，交给下一条判据。
+
+    Z 是僵尸：进程已经退出，只剩父进程没回收。它不占端口也不占内存，
+    对「服务停没停」这个问句就是停了。不认这一条，SIGTERM 成功后仍会读成还活着，
+    stop 会白等三轮再谎报「没退」。2026-11-16 在 WSL Debian 上实测到的形状。
+    """
+    if state is None:
+        return None
+    return state != "Z"
+
+
+def _pid_really_alive(pid):
+    """进程还在不在，僵尸算「不在」。"""
+    if os.name == "nt":
+        return _pid_cmdline(pid)[1]
+    try:
+        with open("/proc/%d/stat" % int(pid), encoding="utf-8", errors="replace") as f:
+            verdict = _alive_from_state(_state_from_stat(f.read()))
+        if verdict is not None:
+            return verdict
+    except FileNotFoundError:
+        return False            # /proc/<pid> 整目录没了 = 已经回收
+    except OSError:
+        return True
+    try:
+        r = subprocess.run(["ps", "-o", "state=", "-p", str(int(pid))],
+                           capture_output=True, timeout=20)
+    except Exception:
+        return True
+    out = r.stdout.decode("utf-8", "replace").strip()
+    if r.returncode != 0 or not out:
+        return False
+    verdict = _alive_from_state(out[0].upper())   # ps 会给 "S"、"Z"、"S+"、"Z+" 这类
+    return True if verdict is None else verdict
+
+
+def _wait_gone(pid, timeout, probe=None, nap=None, steps=None):
+    """等进程真的消失。True = 确认停了。probe、nap、steps 可注入，自检才能不真睡觉。
+
+    steps 是每次探测之间的等待秒表。Windows 的探测要起一个 PowerShell，一次约 0.9 秒，
+    拿 0.2 秒的格子轮询等于白等十几秒；taskkill /F 又是同步强杀，一次确认就够。
+    POSIX 的探测读 /proc，成本近乎零，才用密格子。
+    """
+    if probe is None:
+        probe = _pid_really_alive
+    if nap is None:
+        nap = time.sleep
+    grid = list(steps or WAIT_STEPS)
+    waited, i, alive = 0.0, 0, probe(pid)
+    while alive and waited < timeout:
+        step = grid[i % len(grid)]
+        nap(min(step, timeout - waited))
+        waited += step
+        i += 1
+        alive = probe(pid)
+    return not alive
+
+
+def _kill_pid(pid, force=False):
+    """停下来，并回报有没有确认停掉。
+
+    Windows 的 taskkill 本来就带 /F。POSIX 先发 SIGTERM，那是服务能抓住做收尾的信号。
+    抓住后又挂住不退的进程，旧版照样打印「已停止」，读的人会以为端口空出来了。
+    现在等 KILL_WAIT 秒确认，只有明确 --force 才升级到 SIGKILL。
+    """
     if os.name == "nt":
         subprocess.call(["taskkill", "/PID", str(pid), "/T", "/F"],
                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    else:
-        try:
-            os.kill(pid, 15)
-        except ProcessLookupError:
-            pass
-
+        return _wait_gone(pid, KILL_WAIT, steps=NT_WAIT_STEPS)
+    try:
+        os.kill(pid, 15)
+    except ProcessLookupError:
+        return True
+    if _wait_gone(pid, KILL_WAIT):
+        return True
+    if not force:
+        return False
+    try:
+        os.kill(pid, 9)
+    except ProcessLookupError:
+        return True
+    return _wait_gone(pid, KILL_WAIT)
 
 def cmd_stop(args):
     root = Path(args.root).expanduser().resolve()
@@ -764,9 +861,13 @@ def cmd_stop(args):
     if action == "kill":
         if verdict is None:
             log("读不到 pid 的命令行，按 --force 的明确要求停止")
-        _kill_pid(pid)
-        state_file.unlink(missing_ok=True)
-        log(f"已停止 pid={pid}")
+        if _kill_pid(pid, getattr(args, "force", False)):
+            state_file.unlink(missing_ok=True)
+            log(f"已停止 pid={pid}")
+        else:
+            log(f"pid={pid} 收到信号后没退出（多半是它抓住了 SIGTERM 又没收尾）。"
+                "状态文件留着，端口大概率还被它占着。确认要强行停就带 --force 重跑，"
+                "那一步会补发 SIGKILL")
     elif action == "gone":
         state_file.unlink(missing_ok=True)
         log(f"pid={pid} 的进程已不存在（服务已退出或中途崩了），只清理状态文件")
@@ -959,7 +1060,47 @@ def _self_test():
     if pid_verdict(cmd) is not None or alive is not True:
         bad.append("ps 跑不了时应为「读不到但进程可能还在」，实得 verdict=%s alive=%s"
                    % (pid_verdict(cmd), alive))
-    total = len(keep) + len(drop) + 9 + len(stop_cases) + 4 + len(posix_cases) + 1 + _symlink_cases(bad)
+    # 2026-11-16 补（Linux/WSL 实测发现的缺口）：stop 不许在进程没退的情况下说「已停止」。
+    # 状态字符解析要有用例：命令名里带括号与空格是 /proc/<pid>/stat 的常见形状。
+    stat_cases = [
+        ("242 (python3) S 1 242 242 0 -1 4202752 1 1", "S"),
+        ("242 (python3) Z 1 242 242 0 -1 4202752 1 1", "Z"),
+        ("242 (my prog (x)) Z 1 242 242 0", "Z"),
+        ("242 (weird) 1 2 3", None),
+        ("", None),
+    ]
+    for text, want in stat_cases:
+        got = _state_from_stat(text)
+        if got != want:
+            bad.append("_state_from_stat(%r) 得到 %s 期望 %s" % (text[:28], got, want))
+    # 状态字符到「还在不在」的翻译。Z 算不在，是 2026-11-16 WSL 实测钉下来的口径。
+    alive_cases = [(None, None), ("Z", False), ("S", True), ("R", True), ("D", True), ("T", True)]
+    for state, want in alive_cases:
+        got = _alive_from_state(state)
+        if got is not want:
+            bad.append("_alive_from_state(%s) 得到 %s 期望 %s" % (state, got, want))
+    seen = []
+
+    def _probe_gone_third(p):
+        seen.append(p)
+        return len(seen) < 3          # 前两次还在，第三次没了
+
+    if not _wait_gone(7, 1.0, probe=_probe_gone_third, nap=lambda s: None):
+        bad.append("第三次探测就没了，_wait_gone 却报没停")
+    if _wait_gone(7, 0.6, probe=lambda p: True, nap=lambda s: None):
+        bad.append("一直活着的进程，_wait_gone 报成已停")
+    nap_calls = []
+    _wait_gone(7, 0.6, probe=lambda p: True, nap=lambda s: nap_calls.append(s))
+    if len(nap_calls) != 3:
+        bad.append("timeout 0.6 应该睡 3 次 0.2，实得 %d 次" % len(nap_calls))
+    # Windows 的格子必须稀：一次探测要起一个 PowerShell，密格子等于白等十几秒
+    nt_calls = []
+    _wait_gone(7, KILL_WAIT, probe=lambda p: nt_calls.append(p) or True,
+               nap=lambda s: None, steps=NT_WAIT_STEPS)
+    if len(nt_calls) > 5:
+        bad.append("Windows 的探测格子太密：跑了 %d 次 PowerShell 形状的探测" % len(nt_calls))
+    total = (len(keep) + len(drop) + 9 + len(stop_cases) + 4 + len(posix_cases) + 1
+             + len(stat_cases) + len(alive_cases) + 4) + _symlink_cases(bad)
     print("SANDBOX SELF-TEST: %s（%d 项）" % ("PASS" if not bad else "FAIL", total))
     for m in bad:
         print("  FAIL:", m)
