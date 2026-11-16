@@ -23,6 +23,7 @@
   - 放行条件（全部满足）：schema == plugin-forge/contract-approval@1；decision == "approved"；
     issued_by == "plugin-forge-contract"（自证字符串，只验记录不验身份）；未到 expires_at（缺省视为长期有效）；目标路径命中 scope 的某个 glob。
   - glob 语法：* 不跨 /；** 跨目录（src/** 覆盖 src 下任意深度）；不含 / 的模式按文件名匹配。
+    只认这两种通配。? 与 [...] 按字面字符处理，别指望它们当通配符用。
   - 路径在项目根之外 → 拒绝（路径范围铁律）。与根没有公共祖先时（Windows 跨盘符）也算根外：
     必须输出 REFUSE，不许让 relpath 的 ValueError 冒泡——异常会让整轮判定消失。
   - 记录里填了 plan_sha256 时，plan_file 的内容必须还能算出同一个摘要；对不上就是方案被改过，旧准奏失效。未填 plan_sha256 的旧记录不受影响。填了摘要却没填 plan_file → 拒绝（无法确认方案未改）。
@@ -130,7 +131,13 @@ def is_protected(path, root=None):
 
 
 def compile_glob(pat):
-    """极简 gitignore 风格 glob → 锚定正则。src/** = 跨段；*=段内；不含 / 时另按文件名匹配。"""
+    """极简 gitignore 风格 glob → 锚定正则。src/** = 跨段；*=段内；不含 / 时另按文件名匹配。
+
+    只实现文档承诺的 * 与 **。? 与 [...] 曾在这里实现过：没人用、docstring 与 schema 都没承诺，
+    而 [...] 把用户文本原样塞进正则——scope 写成 "src/[b-a].py" 就抛 PatternError，
+    整轮判定随之消失（与本文件第 26-27 行的铁律同类）。现在这两个字符走 re.escape，
+    按字面匹配：scope 顶多少覆盖几个文件，门禁只会更严，不会失效。
+    """
     out, i, n = [], 0, len(pat)
     while i < n:
         c = pat[i]
@@ -140,13 +147,6 @@ def compile_glob(pat):
                     out.append("(?:.*/)?"); i += 3; continue
                 out.append(".*"); i += 2; continue
             out.append("[^/]*"); i += 1; continue
-        if c == "?":
-            out.append("[^/]"); i += 1; continue
-        if c == "[":
-            j = pat.find("]", i)
-            if j < 0:
-                out.append(re.escape(c)); i += 1; continue
-            out.append(pat[i:j + 1].replace("[!", "[^")); i = j + 1; continue
         out.append(re.escape(c)); i += 1
     rx = re.compile("^(?:" + "".join(out) + r")\Z")
     bare = re.compile("^" + re.escape(os.path.basename(pat)) + r"\Z") if "/" not in pat else None
@@ -363,6 +363,23 @@ def _self_test():
         if bool(is_protected(path, root)) != want:
             ok = False
             print("SELF-TEST FAIL(保护面): %s 期望 protected=%s" % (path, want))
+    # 2026-11-16 极简化：glob 只认 * 与 **。? 与 [...] 现在按字面字符处理，
+    # 而旧实现的 [...] 把用户文本原样塞进正则——"src/[b-a].py" 会抛 PatternError，整轮判定消失。
+    # 这三条钉住「不匹配」与「不抛异常」。方向是变严：scope 少覆盖，门禁多拒。
+    for pat, rel, want in (("src/?.py", "src/a.py", False),
+                           ("src/[ab].py", "src/a.py", False),
+                           ("src/[b-a].py", "src/a.py", False),
+                           ("src/*.py", "src/a.py", True),
+                           ("src/**", "src/p/b.py", True)):
+        try:
+            got = match_scope([pat], rel)
+        except Exception as e:
+            ok = False
+            print("SELF-TEST FAIL(glob): scope=%s 解析抛 %s" % (pat, type(e).__name__))
+            continue
+        if got != want:
+            ok = False
+            print("SELF-TEST FAIL(glob): scope=%s 对 %s 期望 %s，得到 %s" % (pat, rel, want, got))
     # A571 第 1 条：项目放在名为 scripts / tools / bin 的上级目录下面时，
     # 无扩展名文件不能被判成受保护代码。旧版对绝对路径做子串匹配，在这里必然误拒。
     nest = os.path.realpath(J("scripts", "proj"))

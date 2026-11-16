@@ -28,6 +28,9 @@ import sys, os, re, json, argparse, tempfile, shutil
 
 SKIP_DIRS = {".git", "node_modules", "__pycache__", ".venv", "venv", "dist",
              "build", ".pytest_cache", ".mypy_cache", ".tox"}
+# 这份扩展名池定义「什么算代码」，只服务于内容扫描。契约门禁另有一份 CODE_EXTS，
+# 那份的用途是「什么算受保护文件」，两处用途不同、成员也不同（门禁多 .svg/.m/.jl 等）。
+# 改这里不必修那里，但别把两份当成同一件事。依据记在 AUDIT.md。
 CODE_EXTS = {".py", ".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs", ".vue", ".svelte",
              ".rs", ".go", ".java", ".kt", ".kts", ".scala", ".swift", ".c", ".h",
              ".cc", ".cpp", ".cxx", ".hpp", ".cs", ".rb", ".php", ".lua", ".pl",
@@ -438,7 +441,7 @@ def scan(root, include_docs, allow):
     return scanned, findings, skips, unclear, adv
 
 
-def score(findings, scanned):
+def score(findings):
     s = {}
     s["SEC-2"] = 25 if len(findings["SEC-2"]) == 0 else (10 if len(findings["SEC-2"]) <= 2 else 0)
     for c in ("SEC-1", "SEC-3", "SEC-4"):
@@ -458,7 +461,8 @@ def _self_test():
     """正例反例各一条，钉住 SEC-1/SEC-2 的实际匹配面（CI 跑，见 sync-check.yml）。"""
     B = chr(92)
 
-    TABLES_BY_ID = {"SEC-1": SEC1, "SEC-2": SEC2, "SEC-3": SEC3, "SEC-4": SEC4}
+    # 直接由 TABLES 推出来。手写第二份 id→表 的映射会在新增一档时静默漏掉那一档。
+    TABLES_BY_ID = dict(TABLES)
 
     def hit(cid, line):
         for pat, _note in TABLES_BY_ID[cid]:
@@ -725,7 +729,7 @@ def main():
                     help="占位词后跟数字也算真值：example1234567 一类不再被吃掉，文档示例会开始报")
     args = ap.parse_args()
     global STRICT_PLACEHOLDER
-    STRICT_PLACEHOLDER = bool(getattr(args, "strict_placeholder", False))
+    STRICT_PLACEHOLDER = args.strict_placeholder
     if args.self_test:
         return _self_test()
     root = os.path.abspath(args.repo)
@@ -734,9 +738,9 @@ def main():
         return 2
     allow = [x.strip() for chunk in args.allow for x in chunk.split(",") if x.strip()]
     scanned, findings, skips, unclear, adv = scan(root, args.include_docs, allow)
-    s, total, verdict, code = score(findings, scanned)
-    unread = [s for s in skips if blind_kind(s) == "unread"]
-    excluded = [s for s in skips if blind_kind(s) == "excluded"]
+    s, total, verdict, code = score(findings)
+    unread = [sk for sk in skips if blind_kind(sk) == "unread"]
+    excluded = [sk for sk in skips if blind_kind(sk) == "excluded"]
     blind = len(unread) + len(unclear)
     if scanned == 0:
         verdict, code = "空扫描（没有读到任何文件，先核对路径与扩展名池）", 3
