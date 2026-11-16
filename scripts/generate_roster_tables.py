@@ -6,7 +6,8 @@ plugin-forge · 名册表生成器（roster.json 为唯一来源）
 用途
   从 roster.json 重新生成 README.md、skills/plugin-forge/SKILL.md、
   agents/plugin-forge-lead.md 里的名册表格，并同步各处的人数声明
-  （"1 主理人 + N 专家"、"调度 N 位专家"、"N 人编制"、"N 个人设"）。
+  （"1 主理人 + N 专家"、"调度 N 位专家"、"N 人编制"、"N 个人设"、"共 N 人编制"）。
+  人数声明同时覆盖 .claude-plugin/plugin.json。
   表格区域由成对标记包住，标记之间只许本脚本写入，不许手改。
 
 用法
@@ -22,7 +23,8 @@ plugin-forge · 名册表生成器（roster.json 为唯一来源）
     都退出码 1，绝不静默跳过。
 
 约束
-  - 零第三方依赖（Python 3.8+）。只写上面三个被标记的文档，不动其他文件。
+  - 零第三方依赖（Python 3.8+）。只写上面三个被标记的文档，外加 .claude-plugin/plugin.json
+    里的人数声明；其余文件一律不动。
 """
 import sys, os, re, json, glob, argparse
 

@@ -9,7 +9,6 @@
       "role": "lead",
       "name_zh": "交付总监（主理人）",
       "name_en": "Forge Lead",
-      "profession_zh": "交付总监",
       "duty": "编排、分拣、契约门禁把关、三段回奏汇编",
       "when_to_dispatch": "总是（编排、分拣、汇编）",
       "max_turns": 180
@@ -20,7 +19,6 @@
       "role": "expert",
       "name_zh": "契约审议师",
       "name_en": "Contract Reviewer",
-      "profession_zh": "平台契约审议",
       "duty": "按目标平台真实能力面审议方案，可封驳",
       "when_to_dispatch": "方案写好之后、写码之前（**门禁**）",
       "max_turns": 60
@@ -31,7 +29,6 @@
       "role": "expert",
       "name_zh": "插件开发工程师",
       "name_en": "Plugin Dev Engineer",
-      "profession_zh": "插件开发工程师",
       "duty": "脚手架 / manifest / 生命周期 / 错误约定 / 修故障",
       "when_to_dispatch": "起脚手架 / 实现 / 修故障",
       "max_turns": 60
@@ -42,7 +39,6 @@
       "role": "expert",
       "name_zh": "测试驱动工程师",
       "name_en": "TDD Engineer",
-      "profession_zh": "测试驱动工程师",
       "duty": "红-绿-重构、最小可跑测试",
       "when_to_dispatch": "实现前写最小测试、实现后转绿",
       "max_turns": 60
@@ -53,7 +49,6 @@
       "role": "expert",
       "name_zh": "架构设计师",
       "name_en": "Architecture Designer",
-      "profession_zh": "架构设计师",
       "duty": "模块接口、架构图、深化扫描",
       "when_to_dispatch": "模块接口 / 架构图 / 深化扫描",
       "max_turns": 60
@@ -64,7 +59,6 @@
       "role": "expert",
       "name_zh": "极简工程师",
       "name_en": "Minimalist Engineer",
-      "profession_zh": "极简工程师",
       "duty": "删冗余 / 死代码 / 过度抽象",
       "when_to_dispatch": "实现后极简化、删冗余",
       "max_turns": 60
@@ -75,7 +69,6 @@
       "role": "expert",
       "name_zh": "代码审查师",
       "name_en": "Code Reviewer",
-      "profession_zh": "代码审查师",
       "duty": "双轴审查、修法清单",
       "when_to_dispatch": "提交前双轴审查",
       "max_turns": 60
@@ -86,7 +79,6 @@
       "role": "expert",
       "name_zh": "规划问诊师",
       "name_en": "Planning & Routing Specialist",
-      "profession_zh": "规划问诊师",
       "duty": "需求 sharpen、能力路由",
       "when_to_dispatch": "需求含糊、方案需 sharpen",
       "max_turns": 60
@@ -97,7 +89,6 @@
       "role": "expert",
       "name_zh": "能力运营师",
       "name_en": "Capability Ops Engineer",
-      "profession_zh": "能力运营师",
       "duty": "skill/prompt 创建、查重、审计、挂接",
       "when_to_dispatch": "需要新 skill / 审计第三方能力",
       "max_turns": 60
@@ -108,7 +99,6 @@
       "role": "expert",
       "name_zh": "运维可靠性工程师",
       "name_en": "Reliability & Ops Engineer",
-      "profession_zh": "运维可靠性工程师",
       "duty": "CI/CD、发布就绪、故障响应",
       "when_to_dispatch": "CI/CD、发布就绪、故障响应",
       "max_turns": 60
@@ -119,7 +109,6 @@
       "role": "expert",
       "name_zh": "安全工程师",
       "name_en": "Security Engineer",
-      "profession_zh": "安全工程师",
       "duty": "密钥 / 注入 / 依赖供应链门禁",
       "when_to_dispatch": "交付前安全门禁（密钥 / 注入 / 依赖）",
       "max_turns": 60
@@ -130,7 +119,6 @@
       "role": "expert",
       "name_zh": "生态调研分析师",
       "name_en": "Ecosystem Research Analyst",
-      "profession_zh": "生态调研分析师",
       "duty": "平台生态调研、缺口分析",
       "when_to_dispatch": "生态 / 市场缺口分析；Workflow A 第 1a 步（先搜后建，rbb 门禁）",
       "max_turns": 60
@@ -141,7 +129,6 @@
       "role": "expert",
       "name_zh": "运行时验证工程师",
       "name_en": "Runtime Verification Engineer",
-      "profession_zh": "运行时验证工程师",
       "duty": "隔离运行时真实加载验证",
       "when_to_dispatch": "\"宿主里到底跑不跑\" / 交付前真实冒烟",
       "max_turns": 60
@@ -152,7 +139,6 @@
       "role": "expert",
       "name_zh": "文档工程师",
       "name_en": "Docs Engineer",
-      "profession_zh": "文档工程师",
       "duty": "README / 教程 / 变更说明 / PR 文本 / 对外沟通，双风格文档门禁",
       "when_to_dispatch": "工作流 G 主力：README / 教程 / 变更说明 / PR 文本 / 对外沟通；风格门禁见 `references/style-anti-slop.md`；外部内容入库审计",
       "max_turns": 40

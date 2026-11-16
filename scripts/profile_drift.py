@@ -10,7 +10,7 @@
   出现该行附近的标识符。不在了，就给出该标识符现在在哪。
 
 用法
-  python scripts/profile_drift.py [--profile 路径] [--json] [--strict] [--limit N] [--fresh]
+  python scripts/profile_drift.py [--profile 路径] [--json] [--strict] [--fresh]
 
   默认只报告：不改文件、不因漂移失败（退出码 0）。--strict 时有漂移退 1，留给以后要 blocking
   的场合；CI 现在按非阻塞接。--fresh 忽略缓存重拉。
@@ -321,7 +321,6 @@ def main():
     ap.add_argument("--profile", default=DEFAULT_PROFILE)
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--strict", action="store_true", help="有漂移就退出 1（默认只报告）")
-    ap.add_argument("--limit", type=int, default=0)
     ap.add_argument("--fresh", action="store_true", help="忽略缓存重拉")
     ap.add_argument("--self-test", action="store_true", help="只跑自检，不碰网络")
     a = ap.parse_args()
@@ -337,8 +336,6 @@ def main():
 
     text = open(a.profile, encoding="utf-8-sig").read().replace("\r\n", NL)
     anchors = collect(text)
-    if a.limit:
-        anchors = anchors[:a.limit]
 
     head, from_cache = resolve_head(use_cache=not a.fresh)
     if not head:
