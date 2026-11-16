@@ -225,10 +225,51 @@ generate_roster_tables.py 的头两处少报了自己的写范围与模式清单
 - session_capability_refresh.py 的 `inp`（解析 stdin 却没人读）与 `build_context` 的 `truncated` 形参。两处都是真死代码，各一行能改完。这个文件是每次会话都要跑的 SessionStart hook，没有自检，CI 只做语法检查，部署副本另在 `~/.workbuddy/hooks/`，而它自己的 §6 降级契约文本受解冻窗口纪律管。本轮不动，等作者点名开那个窗口。
 
 盲区，照实说：
-- `cmd_serve`、`cmd_start`、`cmd_doctor`、`cmd_status` 四个命令体没有自检覆盖（要真起进程或读环境）。第 1、3、8 条改在这里，靠的是实跑探针与逐行读证，不是测试。
+- `cmd_serve`、`cmd_start`、`cmd_doctor`、`cmd_status` 四个命令体没有自检覆盖（要真起进程或读环境）。第 1、3、8 条改在这里，已在 Windows 与 Linux(WSL) 两端实测，见下面「双端对照探针」。`cmd_start` 的 `_wait_health` 与 DETACHED 分支本轮没跑到，仍只有读证。
 - `_pid_really_alive` 是 stop 路径上唯一没有用例的探针。CI 跑 ubuntu，Windows 分支不跑它，自检注入的是别的函数。本轮没补：补它要先给它加注入接缝，那是加东西而不是精简。记在这里待办。
 - roster.json 的「零读者」只在本仓库与本机可证。团队外部工具若读 `profession_zh`，这次删除会打断它。本仓库 66 个文件、三面装机副本、pf-report 工具都搜过，无命中。
-- 装机三面的字节一致性本轮只测了改前那一次（三个脚本 byte-identical）。改完还要跑 `install_sync.py --dry-run` 再 `--apply`，否则宿主用的仍是旧字节。这一步未做。
+- 装机三面本轮已同步：三面各写 22 个文件，第二遍预演报 0 写入，三面的门禁、扫描器、沙箱自检各自跑通。回滚备份 `pf-report/install-backup-20261116T161829`。`references/profile-dsh.md` 按本机独有保留，未推送。
+
+### 沙箱真机实测（2026-11-16 21:42，Windows 11 26200，本机）
+
+作者要求先看清 `cmd_serve` 少写状态这件事，再谈往副仓搬。
+
+- 沙箱根 `C:/Users/54301/forge-sandbox-serve`。挂载既有 checkout `C:/Users/54301/neko_host`（HEAD `b20a9f8`）。
+  跑前跑后那个 checkout 的 `git status` 都干净，沙箱没写它。解释器用那 checkout 自己的 `.venv`，没装新依赖。
+- `serve` 起来：uvicorn 在 127.0.0.1:43117 打 `Application startup complete`，`/health` 回 200。
+  数据根落在沙箱内 `state/LocalAppData`。上游内置插件 11 个被扫到，只有 `web_search` 因 `auto_start = true` 进 running。
+  用户已装插件一个都没被拉进来，隔离这条守住。
+- pid 身份：`sandbox.json` 记的 pid 是真服务进程（那个 venv 的 python 跑 `plugin/user_plugin_server.py`），
+  不是 `sandbox.py serve` 包装进程。这正是砍掉 Popen 前那次写入换来的结果。
+- `status` 在真返回体上跑通删掉猜测键后的计数：`/plugin/status` items=11，`/plugin/messages` items=0。
+- `stop` 花 5.2 秒，先确认再打「已停止 pid=36888」，删状态文件，后台任务随进程树一起退 0。
+  事后核查：相关服务进程 0 个，43117 无应答。
+- Popen 失败分支的反向对照：在仓库外把「Popen 前先写状态」加回一份拷贝，同一探针下旧写法留下一个
+  pid 等于包装进程自己的状态文件，改后的代码什么都不留。脚本 `forge-scratch/popen_fail.py`。
+
+### 双端对照探针（2026-11-16 22:05，Windows 3.15.2 与 WSL Debian python3 3.13.5）
+
+上面那次真机跑的是 Windows。作者上轮指定 Linux 走 WSL，所以同样的三件事在两端各跑一遍。
+脚本在仓库外：`forge-scratch/popen_fail2.py`，它不需要 N.E.K.O 依赖（假入口加注入的失败 Popen）。
+
+| 探针 | Windows (nt) | Linux (posix) |
+|---|---|---|
+| Popen 抛异常，本轮改完的 `cmd_serve` | 什么都不留 | 什么都不留 |
+| Popen 抛异常，把旧写法加回去 | 留下 pid=包装进程自己的状态文件 | 同样留下（pid=268） |
+| `cmd_doctor` 撞见假 3.9 解释器 | die，退出码 2 | die，退出码 2 |
+
+旧写法那一行就是本轮砍掉的东西：包装进程自己的 pid 被写成服务 pid，进程树一断它就等 pid 复用。
+两端同结果，说明这条修正不依赖平台分支。doctor 那行同时证明砍掉 `checks[:1]` 之后判定不再靠位置。
+
+### 往 coopanion-forge 搬的结论
+
+沙箱这一件没有可搬的东西。那仓的内核清单 18 个目标里没有沙箱件，`find` 搜不到 `sandbox.py`，
+`skills/coopanion-forge/scripts/` 只有门禁与扫描器两件。N.E.K.O 沙箱是本仓的平台资产，不在内核同步面里。
+
+门禁那条 glob 修正相反，它是 delta 目标，已随基线 `2d658a7` 落地（那边 HEAD `65364c5`，已推，CI 过）。
+本轮核过的证据：那边的 `compile_glob` 函数体已无 `?` 与 `[` 分支，docstring 与 5 条新用例都在，
+门禁 `--self-test` PASS，`sync_kernel.py --check` 报「一致 18 / 需搬 0 / 缺件 0 / 替换失败 0」，
+`tools/gen_deltas.py --check` 报 7 个目标 18 处替换一致。
 
 复跑（2026-11-16，本机）。六个文件 `py_compile` 全过。五个 `--self-test` 全绿，例数以实跑输出为准。
 `roster --check` OK。真实扫描仍 95/100 放行。本轮 3 组反向对照全部变红，4 个删除旗标探针全部符合预期。
