@@ -9,14 +9,14 @@
 | blader/humanizer | v4.0.0 | MIT | SKILL.md 纯改写规则，1 个 Wikipedia 外链；scripts/validate-package.py 只读本包文件做结构校验 | 通过。规则已并入 references/style-anti-slop.md，未整包 vendor |
 | op7418/Humanizer-zh | main | MIT | SKILL.md 中文模式库；tests/check_structure.py 只读比对两份文本 | 通过。同上 |
 | woosal1337 asd-ste100 kit | 2.0.5 | MIT（kit；ASD-STE100 规范本身版权属 ASD） | ste-lint.py 本地 lint；hooks 为 Claude Code 专用；无网络 | 通过。规则摘要并入 style-anti-slop.md；本仓库未复制其代码文件，仅引用与摘要 |
-| neko-plugin-sandbox/scripts/sandbox.py | 本仓库自有 | — | 全 127.0.0.1；git/uv/pip 子进程仅用于本地沙箱；taskkill 先核对进程身份；rmtree 只删 `plugin/plugins/<id>` 下的目录 | 通过（2026-11-14 复核）。依据源码 @645da54 的契约断言已在 0984249 复验。**后两条是有条件的，2026-11-11 那轮逐行复核时并不成立**：删除面靠 `plugin-add`/`plugin-rm` 先把 id 按 `^[A-Za-z_][A-Za-z0-9_]*$` 校验（`plugin-add` 与 `cmd_plugin_rm` 各校验一次 id）才关在 plugins 目录内；杀进程面靠 `_pid_is_sandbox_server` 先读命令行，`cmd_stop` 调用它；旧版这里写的是行号，已按本文件「不写行号」的口径换成符号引用（2026-11-15：当时写的 585/616/385/420 全部漂了），命令行读不到时拒杀，除非明确 `--force`（2026-11-15 改，判定函数 `should_kill`，自检 `kill 判定` 六种组合钉住）。边界：任一校验被删或被放宽，本行结论即刻失效，须重新逐行复核 |
+| neko-plugin-sandbox/scripts/sandbox.py | 本仓库自有 | — | 全 127.0.0.1；git/uv/pip 子进程仅用于本地沙箱；taskkill 先核对进程身份；rmtree 只删 `plugin/plugins/<id>` 下的目录 | 通过（2026-11-14 复核）。依据源码 @645da54 的契约断言已在 0984249 复验。**后两条是有条件的，2026-11-11 那轮逐行复核时并不成立**：删除面靠 `plugin-add`/`plugin-rm` 先把 id 按 `^[A-Za-z_][A-Za-z0-9_]*$` 校验（`plugin-add` 与 `cmd_plugin_rm` 各校验一次 id）才关在 plugins 目录内；杀进程面靠 `_pid_cmdline` 读命令行与存活、`pid_verdict` 判身份、`stop_action` 定走向，`cmd_stop` 调用它们；旧版这里写的是行号，已按本文件「不写行号」的口径换成符号引用（2026-11-15：当时写的 585/616/385/420 全部漂了），命令行读不到而进程还在时拒杀，除非明确 `--force`（2026-11-15 改；2026-11-16 由 `should_kill` 换成 `stop_action`，判定与执行拆开，自检 `stop 判定` 跑满 verdict×alive×force 十二种组合）。边界：任一校验被删或被放宽，本行结论即刻失效，须重新逐行复核 |
 | session_capability_refresh.py | 本仓库自有 | — | 只读扫描 + stdout JSON，零第三方依赖，异常全捕获 exit 0 | 通过。示例路径已脱敏为 ~（**教训**：那次脱敏把 `ROOT` 的字面 `~` 留成未展开路径，脚本一度恒报「路径缺失」；2026-11-14 改为 `os.path.expanduser` 读取、只在输出侧脱敏） |
 | avatars/*.jpg/png（14） | — | — | EXIF 扫描 | 无 EXIF，通过（avatars 已随 v2.0.0 移除，见整合记录） |
 | intro.html（2） | — | — | 无 <script>/外链 src/onclick | 通过（intro.html 已随 v2.0.0 移除，见整合记录） |
 | references/delivery-self-check.md（外部行为闸门全文 136 行，含 3.11/yzg 单机示例） | 未标注版本 | **来源与许可未确立**（frontmatter 名为 `delivery-no-pseudoblock`，2026-11-14 本机检索无上游出处） | 纯文档，无可执行代码；行为级提示词 | 暂保留但**不设为强制**：来源确立前不得作为交付闸门接线（SKILL.md §6 现在把它列为可选参考，强制口径是 §6 正文自己写的三条）；示例中的 3.11 地铁录入、yzg 字段库、`gui_review.py` 属另一产品，需剥离或标注为对照 |
 | 1-dcjiang/neko-reuse-before-build（`reuse_before_build` 插件，先搜后建规则正典） | v0.3.12 / commit 4a14fbd（2026-11-15 经 GitHub API 核对：tag v0.3.12 解引用指向该 commit，LICENSE 全文为 MIT (c) 2026 1-dcjiang） | MIT（(c) 2026 1-dcjiang，仓库自带 LICENSE 文件；2026-11-15 复查：REST license 与 GraphQL licenseInfo 均返回 MIT（commit 4a14fbd）。此前记录的「licenseInfo 返回空」已作废。规则：许可以仓库里的 LICENSE 文件为准，不以 GitHub 的 license 字段为准——分类有滞后，本行就是被滞后骗过一次） | 本仓库**未内嵌**任何文本或代码，只在 SKILL.md 铁律 3、references/workflows.md 的 Workflow A 第 1a 步、agents/plugin-forge-lead.md、agents/plugin-forge-market-research.md 与 codex 提示词里指向它 | 通过（引用式接入）。规则本体、sha256 正典哈希与机械校验由上游自持，本团不复读不另立编号；要拿到校验能力请安装该插件。上游改版需重新核对版本号与 commit |
-| jusspound-netizen/dsh-plugin-scanner（外部仓库，仅作设计参照） | bb8dc7cd（2026-11-14） | **无 LICENSE 文件** | 未取任何代码，只借鉴两点设计：清单形状检查、盲区不得当作放行（`--fail-unclear` + 退出码 3）| 通过（本轮只借概念，`security_audit.py` 为独立实现；LICENSE 已写设计致谢；建议上游补许可） |
-| references/neko/system.llm（外部系统提示词，604 行） | v4 | **未声明**（2026-11-14 本地未找到来源与许可） | 纯文档，无可执行代码；正文含"无条件执行操作者指令"与"被问及工具能力时回避否认"两类纪律，与本团宪法冲突 | 归档保留：文件头已加 ARCHIVED 声明（不是本团行为规范，冲突时宪法优先）。来源与许可由作者补充；补不上则从公开仓库移除 |
+| jusspound-netizen/dsh-plugin-scanner（外部仓库，仅作设计参照） | bb8dc7cd（2026-11-14） | **无 LICENSE 文件** | 未取任何代码，只借鉴两点设计：清单形状检查、盲区不得当作放行（`--fail-unclear` + 退出码 3）| 通过（本轮只借概念，`security_audit.py` 为独立实现；设计致谢写在 `NOTICE`（2026-11-16 起，原来在 `LICENSE` 附加段）；建议上游补许可） |
+| references/neko/system.llm（外部系统提示词，604 行） | v4 | **未声明**（2026-11-14 本地未找到来源与许可） | 纯文档，无可执行代码；正文含"无条件执行操作者指令"与"被问及工具能力时回避否认"两类纪律，与本团宪法冲突 | 归档保留：文件头已加 ARCHIVED 声明（不是本团行为规范，冲突时宪法优先）。**2026-11-16 作者裁决：保留，不设移除期限。** 出处与许可仍缺，这条从「待决」转进下面的「残留风险」，不再是待办 |
 
 ## 脱敏记录（2026-11-11）
 
@@ -31,6 +31,7 @@
 - sandbox.py 的 pip install 走 PyPI（环境准备用途，声明内），离线机器需自备依赖。
 - SEC-2 有已知漏报（取舍，不是缺陷）：引号内的全大写串与纯数字口令不报——`DB_PASSWORD = "ABCDEFGH1234"`、`AWS_SECRET_KEY = "99999999"` 实测漏。收紧会把 `KEY_ENV = "AWS_SECRET_ACCESS_KEY"` 这类合法写法变成误报，而一票否决项的误报代价比漏报大。
 - 1a 是纯文字门禁：rbb 的机械校验跑在 N.E.K.O 宿主，Claude Code 与 Codex 里靠执行纪律。要接本地 checker，得先解决「第二份规则副本会各自漂移」。
+- `references/neko/system.llm`（604 行）随 marketplace 的 `./` 一起公开分发，出处与许可至今未确立。作者 2026-11-16 裁决保留、不设移除期限，所以这条是**长期风险**，不是待办：日后一旦确立出处，按 `NOTICE` 与本表补记；若上游主张权利，移除动作要连着改 `NOTICE`、本表与本节三处。
 
 ## 契约门禁体检（2026-11-15，issue #3）
 
@@ -112,12 +113,12 @@ N.E.K.O 服务与 git/uv/pip 都不读它们。自检名单扩到 61 项（本�
 |---|---|
 | 1 离线降级只在 AUDIT 里存在 | 属实。已补进四处操作性文档，并写明「1a 不可跳，但它可以以『未核验』形态交付」。当时 `constitution.md` 第 4 条仍是「外部不可用就跳过」，这句说过头了：例外条款到 A472 那轮才补进去（见下一节） |
 | 2 delivery-self-check 与 AUDIT、LICENSE 冲突 | 属实。SKILL §6 改成：该文件为**可选参考**，强制口径收敛成正文自己写的三条（贴闸门快照 / 每项写实 / 命中即返工）。理由按 AUDIT 原结论——来源与许可未确立前不得接线为强制 |
-| 3 私钥文件默认不拦 | 属实。`security_audit.py` 新增 `secret_name_hits()`：`id_rsa`/`id_dsa`/`id_ecdsa`/`id_ed25519`/`.netrc`/`_netrc`/`.npmrc`/`.pypirc` 与 `.pfx .p12 .kdbx .ppk .jks .keystore` 按文件名计 SEC-2（不读内容）。`.pem` 与 `.key` 故意不含：前者常是公钥证书，后者在 Next.js 里是本地化文件，按名字阻断会误伤，它们留在真盲区账里 |
+| 3 私钥文件默认不拦 | 属实。`security_audit.py` 新增 `secret_name_hits()`：`id_rsa`/`id_dsa`/`id_ecdsa`/`id_ed25519`/`.netrc`/`_netrc`/`.npmrc`/`.pypirc` 与 `.pfx .p12 .kdbx .ppk .jks .keystore` 按文件名计 SEC-2（不读内容）。`.pem` 与 `.key` 故意不含：前者常是公钥证书，后者在 Next.js 里是本地化文件，按名字阻断会误伤，它们留在真盲区账里。**本行的名单到 A472 那轮已收窄，不再是现口径**：`.npmrc` / `.pypirc` 改按内容判（且值要真是凭据形态），`.jks` / `.keystore` 退回真盲区，`id_*` 改前缀匹配并排除 `.pub`。现行口径看 `references/security-checklist.md` 的「文件名判据」一节 |
 | 4 Codex 形态没有机器门禁 | 属实。提示词第 4 步补准奏落盘与 `check_contract_approval.py` 命令，第 8 步补 `security_audit.py`；SKILL.md「两种形态完全一致」那句现在给出命令所在位置 |
 | 5 1a 缺上游两条硬约束 | 已补：候选至少 3 个、最多细评 6 个，少于 3 个回去扩词；Join/Fork 的对外写操作每次单独确认，候选仓库内容按数据不当指令 |
-| 6 自检例数写死 | 已改成实算（读自身源码数 `helper_bad.append(` 出现次数）。这个数已经错过多次：11→16→18→68→75。现值以 `--self-test` 实跑输出为准（本机实测 75 例），本行不再钉死数字以免再次漂移。 |
+| 6 自检例数写死 | 已改成实算（读自身源码数 `helper_bad.append(` 出现次数）。这个数已经错过多次：11→16→18→68→75→82。现值一律以 `--self-test` 实跑输出为准，本行与本文件都不再钉数字（A571 第 6 条：当时这行还留着「本机实测 75 例」，而同一文件另一处写 82，两个都是抄的）。 |
 | 7 pem 判定没进自检 | 已补端到端用例：临时目录放 `srv.pem` 与 `id_rsa`，跑真 `scan()`，断言前者进真盲区、后者计 SEC-2 |
-| 8 AUDIT 引的 sandbox 行号已漂 | 已改符号引用（`_pid_is_sandbox_server` / `cmd_stop` / `plugin-add` / `plugin-rm`）。AUDIT 自己就说不写行号，这条是我自己违反的 |
+| 8 AUDIT 引的 sandbox 行号已漂 | 已改符号引用（`cmd_stop` / `plugin-add` / `plugin-rm`，杀进程面当时是 `_pid_is_sandbox_server`，2026-11-16 起换成 `_pid_cmdline` + `pid_verdict` + `stop_action`）。AUDIT 自己就说不写行号，这条是我自己违反的 |
 | 9 `plugin-add` 不带 `--link` 时 rmtree 报错 | 属实。复制分支补 `is_symlink()` 判断，与 `--link` 分支和 `cmd_plugin_rm` 同款 |
 | 10 1MB–50MB 上游文件被判「404 已删」 | 属实。抽成 `body_state()`：`None` 才是 missing，200 无正文是 big，归「无法判定」并进自检三例 |
 | 11 CI 没写 permissions | 已加 `permissions: contents: read`。actions 仍按 tag 引用，改 SHA 固定属供应链加固的另一件事，未在本轮 |
@@ -126,6 +127,50 @@ N.E.K.O 服务与 git/uv/pip 都不读它们。自检名单扩到 61 项（本�
 | 14 `password = user_input_value` 误报 | 已知取舍，`references/security-checklist.md` 已写明。报告建议的「右值像普通变量名就降级提示」是产品建议，未做 |
 
 反向对照（撤掉修复看自检是否报错）：撤掉 `secret_name_hits` 的接入 → `SELF-TEST FAIL: id_rsa 按文件名没计进 SEC-2，入库私钥仍会被放行`。实跑口径：含 `id_rsa` 与 `server.pfx` 的目录 → SEC-2 2 处、85/100、阻断退出 2；只含 `cert.pem` 与 `app.key` 的目录 → 不阻断，但真盲区 2，`--fail-unclear` 退 3。
+
+## 外部深审 ac9af4d 的复核（2026-11-16，报告 A571）
+
+8.7/10（上次 8.6）。报告列 8 组新问题，逐条对源码核对**全部属实**，没有一条需要驳回。报告自己声明是
+增量只读审、没跑代码。这一轮每一条都由我实跑复核后再改。
+
+| 条目 | 核对与处理 |
+|---|---|
+| 1 `is_protected` 的目录旁证按绝对路径做子串匹配 | 属实，中。`check_targets` 传进去的是绝对路径，于是项目放在 `C:\tools\proj`、`~/scripts/x` 下面时，每个无扩展名文件（`LICENSE`、`.gitignore`、`Makefile`）都被判成受保护代码，没准奏就拒。改成按**项目根相对路径逐段**匹配（新增 `_hint_segments` + `_dir_hint_hit`，`is_protected(path, root=None)`）。调用方没给 root 时保守到只认紧邻父目录。自检真造一个 `<root>/scripts/proj` 当项目根钉这条。同一函数的反向缺口一起补：`.svg` 进 `CODE_EXTS`，`Makefile` / `Dockerfile` / `Containerfile` / `justfile` 进新增的 `BUILD_FILE_NAMES`，`hooks.json` 进新增的 `HOST_EXEC_NAMES`。踩到一处自己的坑：第一版用 `os.path.relpath` 的结果直接按 `/` 切段，Windows 上 relpath 给反斜杠，旁证整条失效，是自检把它判红的 |
+| 2 `stop` 的保护在 macOS 上永远读不到 | 属实，中。非 Windows 分支只读 `/proc`，macOS 没有 → 判定恒 None → 每一次 `stop` 都要 `--force`。POSIX 那半抽成 `_posix_cmdline(pid, read_proc, run_ps)`，取数函数由调用方注入，于是 macOS 的形状能在任何平台上自检（`ps -p <pid> -o command=` 兜底）。另一半是同一份「读不到」被混用：pid 已不存在（服务崩了、`start` 超时后 terminate）也要 `--force` 才清得掉状态文件。现在 `_pid_cmdline` 返回 `(cmd, alive)`，判定拆成 `pid_verdict` 与 `stop_action`（kill / gone / reuse / refuse 四走向），`should_kill` 由 `stop_action` 取代。`--force` 不越 `reuse`：force 的意思是「读不到命令行也杀」，不是「确认是别人的进程还照杀」。`cmd_stop` 末尾那句无条件的「已停止 pid=…」改成按走向分别打印。`neko-plugin-sandbox/SKILL.md` 补「stop 的四种走向」一节与 `--force` 说明（报告点的那条缺 `--force` 已补）。真进程实测四种走向见下 |
+| 3 `id_rsa.pub` 被当私钥一票否决 | 属实。前缀匹配连公钥一起命中，与本文件既有的「误报代价比漏报大」相反。加 `PUBLIC_KEY_SUFFIX` 排除，自检补一例，并补一例反向（排除 `.pub` 以后 `id_ed25519.bak` 仍要命中） |
+| 4 `.npmrc` 写 `${NPM_TOKEN}` 也被否决 | 属实，而且那是 npm 官方推荐写法。`auth_marker` 现在逐行取值判形态：空值、`${...}` 环境变量引用、占位符都不计，只有真凭据形态才计。自检三例（引用 / 占位符 / 真令牌）钉住 |
+| 5 `--allow` 在文件名那一遍没归一化 | 属实。`./tests/fixtures/` 与反斜杠写法豁免得了内容扫描、豁免不了夹具里的 `id_rsa` → 假阻断。抽 `norm_allow` / `is_allowed` 两处共用，自检四种写法各跑一遍，另加一例反向（豁免写错目录时仍要报） |
+| 6 文档漂移 8 处 | 属实，逐条改：SEC-3 名单补 `marshal` / `yaml.unsafe_load` / `os.popen` / `subprocess.getoutput` / `getstatusoutput` 五条。「三处常量一致」改成实际的六处并点出各自用处。`profile_drift.py` 文件头改成 urllib 直连。门禁规则段列出四条判据（原来只写扩展名）。`task-size-routing.md` 小标题去掉「只到 dev + tdd」旧口径、「full lane 才免」改写成可执行的免跑条件。lead 与 codex 的宪法要点版补 1a 例外。codex 短任务路径补 1a 快速档、第 1a 步补「最多细评 6 个」。报告没点到的两处同口径残留一起改了：`agents/plugin-forge-lead.md` 与 `references/workflows.md` 也写着「小改动只到 dev + tdd」 |
+| 7 `共 (\d+) 人` 是空转模式 | 属实。`--check` 实跑证明全仓库没有这句（grep 亦为零命中），只有自检的合成用例。而它作用于四份文档，将来任何无关的「会上共 3 人」都会被 `--write` 改成编制人数。锚定成 `共 (\d+) 人编制`，自检补一例反向：「会上共 3 人发言」不许被改 |
+| 8 `LICENSE` 附加段较长 | 属实。标准正文后接 17 行第三方署名，licensee 可能识别成 Other。署名整段挪到新增的 `NOTICE`，`README` 目录树与那句许可说明、本文件 `AUDIT.md` 引用 `LICENSE` 致谢的一处同步改。**挪的时候发现正文本身有缺陷**：`LICENSE` 的 MIT 句子在 `NONINFRINGEMENT.` 就断了，缺 `IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE …` 一整段——即少了责任限制那半条。已按 MIT 标准全文补回，这不是我改风格，是原文不完整。`system.llm` 的来源与许可仍未确立，作者已裁决保留，见下面「裁决与遗留」 |
+
+反向对照（在仓库外的副本上撤掉修复，看自检是否变红）：8 组控制**全部变红**，没有一组是空转。
+逐条为——公钥排除（`id_rsa.pub 是公钥，不该按私钥一票否决`）、`.npmrc` 值形态（引用与占位符两例）、
+`--allow` 归一化（`./`、反斜杠、尾斜杠三种写法各报一条）、目录旁证按段匹配（`上级目录名 scripts 被当旁证`）、
+名单扩充（`Makefile` / `Dockerfile` / `hooks.json` 三例）、`gone` 走向（6 条组合变红）、
+macOS 的 ps 兜底（撤掉兜底后 `POSIX 分支：verdict=None 期望 verdict=True`）、
+人数模式锚定（「会上共 3 人发言」被改成 14）。控制脚本留在 `~/forge-scratch/`，不进仓库。
+
+真进程实测（Windows，本机跑 `sandbox.py stop`，2026-11-16）：命令行里带 `user_plugin_server.py` 的活进程
+→ 打印「已停止 pid=…」，随后该进程确实没了。无关活进程带 `--force` → 判复用、不杀，该进程仍活着。
+不存在的 pid → 打印「进程已不存在…只清理状态文件」，状态文件删除且不需要 `--force`。四种走向各自核对过。
+macOS / Linux 上的 `ps` 兜底只有离线用例，**本机跑不到真实该平台，标未验证**。
+
+A464 第 13 条留的「`pid` 复用判断仍无用例」这一项，本轮起关闭：判定表 12 组加 POSIX 5 组，全在自检里。
+
+实跑口径（2026-11-16，本机）：五个脚本 `--self-test` 全绿。例数一律以实跑输出为准（本文件不钉数字）。
+对本仓库真跑扫描（三条豁免、CI 同口径）为 SEC-1 1 处、SEC-2 0 处、总分 95/100、放行。
+`--check` 报名册与人数声明一致。
+
+### 裁决与遗留（2026-11-16）
+
+- `references/neko/system.llm`：**作者已裁决保留，不设移除期限**（2026-11-16，用户在本次修复回奏里定的）。
+  本文件原来写「补不上则从公开仓库移除」，那句从今天起不再是待办。出处与许可仍然缺，所以这条改记在上文
+  「残留风险」一节：长期风险，随时可被上游的主张推翻。日后若确立出处，改三处——`NOTICE`、本表第 19 行、残留风险那一条。
+- `NOTICE` 的位置：本仓库把它放在仓库根。若以后走包分发，需要确认打包面（`files` / 插件包）把 `NOTICE` 一起带上，
+  否则署分会随打包丢失。致谢项的合规要求比 `LICENSE` 更长。
+
+
 
 ## 更正记录（2026-11-15）
 
@@ -159,15 +204,16 @@ N.E.K.O 服务与 git/uv/pip 都不读它们。自检名单扩到 61 项（本�
 - 分诊跑 10 处发现全部落在两个文件：`skills/plugin-forge/scripts/security_audit.py`（正则定义与自述句——扫描器定义，非行为）；`skills/neko-plugin-sandbox/scripts/sandbox.py`（127.0.0.1 探活、pip 装依赖、git fetch——2026-11-11 已逐行复核，声明用途见上文与残留风险节）。即三条豁免的依据。SEC-1、SEC-2 零发现，全仓库无明文密钥与越界写入。
 - 文档扫 28 处命中集中在审计与调研文档自身（security-checklist.md、neko 调研笔记、本文件、沙箱 SKILL.md），是规则描述与调研记录，不是可执行行为；SEC-4 的"已声明"判定以人工对照本文件为准，不靠脚本给满分。逐文件分布以重跑 `--json` 的输出为准，本节不再手抄。
 - 盲区提醒：本节的 SEC-1 / SEC-2 数字出自放宽前的规则——旧 SEC-1 匹配不到反斜杠 `C:\Users\<名>` 路径，旧 SEC-2 匹配不到 JSON `"api_key": "..."` 与 `.env KEY=value`。放宽规则后复跑，本仓库结果不变（SEC-1 1 处、SEC-2 0 处、95/100、放行，实测）。
-- 2026-11-14 二次复跑（SEC-2 覆盖面重做）：旧式 `` 在下划线处失配，`OPENAI_API_KEY=`、`DB_PASSWORD=`、`AWS_SECRET_ACCESS_KEY=`、`MY_SECRET=` 四种形状全部漏报。先改成只看字母边界并允许 `NAME_` 前缀与 `_WORD` 后缀段，复核又指出裸 token、驼峰、粘连名与 URL 内嵌凭据仍漏，且变量引用型右值会误报——一票否决项误报的代价比漏报更大。现最终形态是**按标识符拆词**判定：键名切 `_` `.` `-` 与驼峰后比对词表，右值是属性路径、全大写常量、类型标注、纯数字、URL、自引用或函数调用时排除。自检例数看 `--self-test` 输出（2026-11-15 实跑 82 例）（含误报反例与盲区分类），CI 除自检外还对本仓库真跑一次扫描。本仓库仍是 95/100、SEC-2 0 处（实测）。
+- 2026-11-14 二次复跑（SEC-2 覆盖面重做）：旧式 `` 在下划线处失配，`OPENAI_API_KEY=`、`DB_PASSWORD=`、`AWS_SECRET_ACCESS_KEY=`、`MY_SECRET=` 四种形状全部漏报。先改成只看字母边界并允许 `NAME_` 前缀与 `_WORD` 后缀段，复核又指出裸 token、驼峰、粘连名与 URL 内嵌凭据仍漏，且变量引用型右值会误报——一票否决项误报的代价比漏报更大。现最终形态是**按标识符拆词**判定：键名切 `_` `.` `-` 与驼峰后比对词表，右值是属性路径、全大写常量、类型标注、纯数字、URL、自引用或函数调用时排除。自检例数看 `--self-test` 输出（本文件不钉数字，见 A571 第 6 条）（含误报反例与盲区分类），CI 除自检外还对本仓库真跑一次扫描。本仓库仍是 95/100、SEC-2 0 处（实测）。
 - 复扫触发：仓库脚本变更 ≥5 个文件、或新增外部内容入库时重跑，结果追加进本节。
 
 ### 2026-11-15 复跑（P4/P6/P7 之后）
 
 - 命令：`python skills/plugin-forge/scripts/security_audit.py . --allow ` + 三条豁免（逗号分隔，`--allow` 现在也可重复传）。
 - 实跑结果：SEC-1 1 处、SEC-2 0 处、SEC-3 0 处、SEC-4 0 处，总分 95/100，放行。
-- 自检计数一律不抄：`security_audit.py --self-test` 报 82 例，`sandbox.py --self-test` 报 76 项，
-  `profile_drift.py --self-test` 报 20 例，`check_contract_approval.py --self-test` 报 PASS。
+- 自检计数一律不抄：四个脚本各跑 `--self-test`，以实跑输出为准，本文件不钉数字。
+  （旧版这里抄了 82 / 76 / 20 三个数，同文件另一处还留着更早的 75，两处互相打脸，
+  而且原则就写在同一节里。2026-11-16 按 A571 第 6 条删掉钉死的数。）
 - 文档扫的新账：`--include-docs` 会把 `scripts/.drift-cache/` 里缓存的上游源码一起扫。
   2026-11-15 实测 194 处 SEC-4 命中里 163 处来自那堆缓存文本。
   所以「文档扫」那个分数现在量的是缓存，不是本仓文档。它是 CI 的 report-only 步骤，不阻塞。
@@ -177,7 +223,7 @@ N.E.K.O 服务与 git/uv/pip 都不读它们。自检名单扩到 61 项（本�
 
 - 复跑命令（三条豁免，exit 0；得分以实跑为准）：`python skills/plugin-forge/scripts/security_audit.py . --allow skills/plugin-forge/scripts/security_audit.py,skills/neko-plugin-sandbox/scripts/sandbox.py,scripts/profile_drift.py`
 - 豁免 1 `skills/plugin-forge/scripts/security_audit.py`：**保留**。命中数随夹具变动，2026-11-15 实测以脚本为准；全部是文件头说明、检测规则自身的字面量与自检夹具。**夹具一律拆写**（`"-----BEGIN " + "RSA PRIVATE KEY-----"）：本文件会被自己扫，A472 抓到过我在新自检里写了两个完整的私钥头字面量，那会让不带 `--allow` 的自查直接把自己否决。
-- 豁免 2 `skills/neko-plugin-sandbox/scripts/sandbox.py`：**保留**。命中均为已声明功能（新增一条 URL 内嵌凭据在 `cmd_start` 的本地回环示例里）。杀进程面的判断函数是 `_pid_is_sandbox_server`，由 `cmd_stop` 调用；它读命令行与 `/proc`。判定交给 `should_kill`：读不到（None）时拒杀并让调用方带 `--force` 再来一次，这是 2026-11-15 的改动；旧版在这里 fail-open，伪造 pid 照样被 taskkill。自检加了 6 条 kill 判定用例，撤掉 `should_kill` 会报 3 条失败。本行原来写的是行号，已按「不写行号」的口径换成符号引用（2026-11-15，A472 第 7 条）。
+- 豁免 2 `skills/neko-plugin-sandbox/scripts/sandbox.py`：**保留**。命中均为已声明功能（新增一条 URL 内嵌凭据在 `cmd_start` 的本地回环示例里）。杀进程面的读取函数是 `_pid_cmdline`（返回命令行与「进程还在不在」两个值），身份判定是 `pid_verdict`，走向判定是 `stop_action`，都由 `cmd_stop` 调用；它读 `/proc`、macOS 上没有 `/proc` 就退回 `ps -p <pid> -o command=`。读不到命令行而进程还在时拒杀，要调用方带 `--force` 再来一次；进程已不存在则直接清状态文件，不再要 `--force`。这是 2026-11-15 的改动（2026-11-16 按 A571 第 2 条补 macOS 兜底与存活分账，`should_kill` 由 `stop_action` 取代）；旧版在这里 fail-open，伪造 pid 照样被 taskkill。自检有 12 条 stop 判定组合，撤掉 `stop_action` 的 None 分支会报多条失败。本行原来写的是行号，已按「不写行号」的口径换成符号引用（2026-11-15，A472 第 7 条）。
 - 豁免 3 `scripts/profile_drift.py`：**新增**（2026-11-15）。3 处命中全在 `api()` 一个函数里：`import urllib.request`、`urllib.request.Request`、`urlopen`。用途＝只读拉取 `api.github.com/repos/Project-N-E-K-O/N.E.K.O` 的 commit 与 contents，用于锚点漂移探针；无写请求、无 exec、无落盘除 `scripts/.drift-cache/`（已 gitignore）之外的文件；带 GITHUB_TOKEN 时只作为 Authorization 头回给 api.github.com，不外发。边界：改成抓取非该仓库、或把响应内容当代码执行，本依据即刻失效。
 - 口径：文件数不要手抄。取法是 `--json` 的 `scanned_files` 与 `skipped_files`，豁免条数看 `.github/workflows/sync-check.yml` 的 `AUDIT_ALLOW`（2026-11-15 实测：扫描 15 个、跳过 84 个、三条豁免）。本行以前写 5 .py / 池 13 / 文档 48 / 减 2 得 11，四个数全过期：实跑是 6 个 .py、池 15、49 个 .md、减 3 得 12。
 - 本轮 8 项修复（2026-11-14）没有增删文件，但扫描器扩面后代码池为 13 个（加入无扩展名与 `.env*` 文件）。新增文字按 SEC-1 至 SEC-4 的模式表人工比对过，没有新触发词。扫描器本轮未重跑，上表的发现数沿用上次实测。
