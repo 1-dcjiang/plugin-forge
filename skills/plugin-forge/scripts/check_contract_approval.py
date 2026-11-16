@@ -13,7 +13,13 @@
   python check_contract_approval.py --self-test                                   # 内置自检
 
 规则
-  - 只拦「代码类」文件（CODE_EXTS 扩展名 + MANIFEST_NAMES 清单文件名）；文档、数据改动不拦。
+  - 拦「代码类」文件，四条判据（`is_protected`）：
+    1 扩展名在 CODE_EXTS（含宿主真执行的 .html / .yml / .svg）；
+    2 文件名在 MANIFEST_NAMES / BUILD_FILE_NAMES（Makefile、Dockerfile）/ HOST_EXEC_NAMES（hooks.json）；
+    3 无扩展名，且所在目录命中 CODE_DIR_HINTS——按**项目根相对路径逐段**比对，
+      上级目录叫 scripts/ 或 tools/ 不算证据；
+    4 无扩展名，且文件第一行是 shebang（#!）。
+    文档与数据改动不拦。
   - 放行条件（全部满足）：schema == plugin-forge/contract-approval@1；decision == "approved"；
     issued_by == "plugin-forge-contract"（自证字符串，只验记录不验身份）；未到 expires_at（缺省视为长期有效）；目标路径命中 scope 的某个 glob。
   - glob 语法：* 不跨 /；** 跨目录（src/** 覆盖 src 下任意深度）；不含 / 的模式按文件名匹配。
@@ -37,9 +43,19 @@ CODE_EXTS = {".py", ".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs", ".vue", ".svel
              ".ex", ".exs", ".erl", ".dart", ".sh", ".bash", ".zsh", ".fish",
              ".ps1", ".psm1", ".bat", ".cmd", ".sql", ".ipynb",
              # 2026-11-15 补：宿主真执行的形态以前不在名单里
-             ".html", ".htm", ".yml", ".yaml", ".m", ".jl"}
+             ".html", ".htm", ".yml", ".yaml", ".m", ".jl",
+             # 2026-11-16 补（A571 第 1 条反向缺口）：SVG 可以内嵌 <script>，
+             # 宿主与浏览器渲染它就会执行，不能当纯素材放过
+             ".svg"}
+# 无扩展名的构建文件：docker build 与 make 真读它们，扩展名判据一条都盖不住。
+BUILD_FILE_NAMES = {"makefile", "dockerfile", "containerfile", "justfile"}
+# 名字即执行面：hooks.json 里每条命令宿主都会直接跑（.json 不在 CODE_EXTS，靠名字进名单）。
+HOST_EXEC_NAMES = {"hooks.json"}
 # 无扩展名的脚本（bin/build、tools/run）按两条旁证判：所在目录，或文件第一行的 shebang。
 # 不写「无扩展名一律算代码」：README、LICENSE、NOTES 都会被误钉成受保护文件。
+# 目录旁证只按「项目根相对路径的路径段」整段匹配，绝不按子串匹配绝对路径：
+# 旧版把 C:\tools\proj、~/scripts/x 这类上级目录也算成证据，于是仓库里每个无扩展名
+# 文件（LICENSE、.gitignore、Makefile）都被判成受保护代码，没准奏就拒（A571 第 1 条）。
 CODE_DIR_HINTS = ("scripts/", "bin/", "tools/", ".github/workflows/")
 MANIFEST_NAMES = {"plugin.toml", "plugin.json", "manifest.json", "package.json",
                   "cargo.toml", "go.mod", "pom.xml", "build.gradle",
@@ -62,17 +78,53 @@ def _has_shebang(path):
         return False
 
 
-def is_protected(path):
+def _hint_segments(path, root):
+    """拿去与 CODE_DIR_HINTS 逐段比对的目录名列表。
+
+    给了项目根就用根相对路径：仓库外面那几层目录（C:\\tools\\proj、~/scripts/x）不再当证据。
+    没给项目根就只认紧邻的父目录，绝不把整条绝对路径的每一段都当证据。
+    """
+    p = path.replace("\\", "/").lower()
+    rel = None
+    if root:
+        try:
+            r = os.path.relpath(p, root.replace("\\", "/").lower())
+        except ValueError:
+            r = None          # 跨盘符没有公共祖先：调用方按根外拒绝，这里不猜
+        if r is not None and not r.startswith(".."):
+            rel = r
+    if rel is not None:
+        return rel.replace("\\", "/").split("/")[:-1]
+    return p.split("/")[:-1][-1:]
+
+
+def _dir_hint_hit(segs):
+    """整段匹配：.github/workflows 这类两段提示要连着对上，不接受子串。"""
+    for hint in CODE_DIR_HINTS:
+        parts = hint.strip("/").split("/")
+        n = len(parts)
+        for i in range(len(segs) - n + 1):
+            if segs[i:i + n] == parts:
+                return True
+    return False
+
+
+def is_protected(path, root=None):
     """要不要过契约门禁。以前只看扩展名，ui/panel.html 与 .github/workflows/*.yml
-    这类宿主真执行、真持密钥的文件全被判成「非代码」，不经准奏就能写。"""
+    这类宿主真执行、真持密钥的文件全被判成「非代码」，不经准奏就能写。
+
+    root 传给目录旁证用；不传则保守地只看紧邻父目录。扩展名与文件名两条判据与 root 无关。
+    """
     relp = path.replace("\\", "/").lower()
     name = os.path.basename(relp)
     ext = os.path.splitext(name)[1]
     if ext in CODE_EXTS or name in MANIFEST_NAMES:
         return True
+    if name in BUILD_FILE_NAMES or name in HOST_EXEC_NAMES:
+        return True
     if ext:
         return False
-    if any(h in relp for h in CODE_DIR_HINTS):
+    if _dir_hint_hit(_hint_segments(path, root)):
         return True
     return _has_shebang(path)
 
@@ -205,7 +257,7 @@ def check_targets(data, root, targets):
             # 等于「往项目外面写宿主会执行的文件」不要准奏。
             results.append((rel, False, "路径在项目根之外（非代码文件也要准奏）"))
             continue
-        if not is_protected(p):
+        if not is_protected(p, root):
             results.append((rel, True, "非代码文件，不入门禁"))
             continue
         if data is None:
@@ -303,11 +355,36 @@ def _self_test():
         (J("src", "Hook.m"), True), (J("src", "main.jl"), True),
         (J("scripts", "build"), True), (J("bin", "run"), True),
         (J("README"), False), (J("LICENSE"), False), (J("docs", "notes.txt"), False),
+        # A571 第 1 条的反向缺口：这四类以前不经准奏就能写
+        (J("assets", "icon.svg"), True), (J("Makefile"), True),
+        (J("deploy", "Dockerfile"), True), (J(".claude-plugin", "hooks.json"), True),
     ]
     for path, want in prot:
-        if bool(is_protected(path)) != want:
+        if bool(is_protected(path, root)) != want:
             ok = False
             print("SELF-TEST FAIL(保护面): %s 期望 protected=%s" % (path, want))
+    # A571 第 1 条：项目放在名为 scripts / tools / bin 的上级目录下面时，
+    # 无扩展名文件不能被判成受保护代码。旧版对绝对路径做子串匹配，在这里必然误拒。
+    nest = os.path.realpath(J("scripts", "proj"))
+    os.makedirs(nest, exist_ok=True)
+    for nm, body in (("LICENSE", "MIT\n"), ("notes", "prose\n")):
+        with open(os.path.join(nest, nm), "w") as f:
+            f.write(body)
+        p2 = os.path.join(nest, nm)
+        if is_protected(p2, nest):
+            ok = False
+            print("SELF-TEST FAIL(保护面): 上级目录名 scripts 被当旁证，%s 判成代码" % nm)
+        rs = check_targets(base(scope=["src/**"]), nest, [p2])
+        if not rs or not rs[0][1]:
+            ok = False
+            print("SELF-TEST FAIL(保护面): 上级目录名让 %s 被拒: %s" % (nm, rs))
+    # 反方向：根以内真叫 tools/ 的目录，旁证必须还在（不许把旁证整条删掉来修上例）
+    os.makedirs(os.path.join(nest, "tools"), exist_ok=True)
+    with open(os.path.join(nest, "tools", "release"), "w") as f:
+        f.write("prose\n")
+    if not is_protected(os.path.join(nest, "tools", "release"), nest):
+        ok = False
+        print("SELF-TEST FAIL(保护面): 根内 tools/ 目录旁证失效")
     sheb = J("tools_local", "deploy")
     os.makedirs(os.path.dirname(sheb), exist_ok=True)
     with open(sheb, "wb") as f:
