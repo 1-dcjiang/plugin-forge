@@ -27,7 +27,7 @@ gh api repos/Project-N-E-K-O/N.E.K.O/contents/scripts/custom_channels/neko_chann
 
 ## 0. 扩展阅读
 
-本 profile 之外还有 23 份 NEKO 笔记在 `references/neko/`（22 份调研 + 1 份归档的外部系统提示词 `system.llm`，它不是 plugin-forge 的行为规范）（ops 16 + court 6，2026-11-11 并入）。冲突时以本 profile 为准；`neko-court-*` 与 `capability-baseline.md` 是历史快照。
+本 profile 之外还有一批 NEKO 笔记在 `references/neko/`（调研笔记加 1 份归档的外部系统提示词 `system.llm`，它不是 plugin-forge 的行为规范）（ops 16 + court 6，2026-11-11 并入）。冲突时以本 profile 为准；`neko-court-*` 与 `capability-baseline.md` 是历史快照。
 
 ## 1. 身份与安装形态
 - N.E.K.O. = 桌面猫娘 AI 宿主；插件 = **独立 Python 进程**（独立进程天然隔离崩溃）。

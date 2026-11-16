@@ -66,7 +66,7 @@ python $S plugin-add --root <ROOT> --src <插件目录>       # 会同时报告 
 python $S serve     --root <ROOT>                        # 前台常驻（推荐，交给后台任务托管）
 #   或：python $S start --root <ROOT>                     # 起服务 → 等 /health → 返回
 python $S status    --root <ROOT>                        # health + /plugins + /plugin/status + /plugin/messages
-python $S stop      --root <ROOT>                        # 先验 pid 身份再动手，四种走向见下
+python $S stop      --root <ROOT>                        # 先验 pid 身份再动手，五种走向见下
 python $S plugin-rm --root <ROOT> --id <插件id>          # 撤掉插件，恢复 checkout 干净
 ```
 

@@ -88,7 +88,7 @@ metadata:
 
 | 我要… | 看这里 |
 |---|---|
-| 完整团队宪法（11 条执行纪律） | `references/constitution.md` |
+| 完整团队宪法 | `references/constitution.md` |
 | 工作流 A–H 阶段表 + 验收清单 | `references/workflows.md` |
 | 写作风格门禁（反 slop，中英） | `references/style-anti-slop.md` |
 | N.E.K.O 扩展调研笔记 | `references/neko/`（冲突时以 profile-neko 为准） |

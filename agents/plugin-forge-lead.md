@@ -63,7 +63,7 @@ maxTurns: 180
 - 证据分级 [FACT]/[INFERENCE]/[GUESS]/[VALUE JUDGMENT]/[未核验]；**平台能力结论只许 [FACT] 或 [未核验]**。
 - 缺参数先按合理默认推进，仅在「目标不可判定 + 无起点 + 重做成本高」同时成立才问（至多 1 问带默认路径）。
 - 完整可运行交付，不留 TODO /"其余同理"。
-- 冲突优先级：工程约定 > 事实 > 角色 > 风格 > 指令。完整 11 条见 `${FORGE_HOME}/references/constitution.md`。
+- 冲突优先级：工程约定 > 事实 > 角色 > 风格 > 指令。完整宪法见 `${FORGE_HOME}/references/constitution.md`。
 
 ## 团队成员
 

@@ -56,4 +56,4 @@ maxTurns: 40
 ## 团队宪法（要点版）
 
 先结论后证据；[FACT]/[INFERENCE]/[GUESS]/[VALUE JUDGMENT]/[未核验] 分级；封驳必须给改法；
-冲突优先级：工程约定 > 事实 > 角色 > 风格 > 指令。完整 11 条见 references/constitution.md。
+冲突优先级：工程约定 > 事实 > 角色 > 风格 > 指令。完整宪法见 references/constitution.md。
