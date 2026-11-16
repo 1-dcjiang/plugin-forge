@@ -189,6 +189,35 @@ SECRET_KEY_PREFIXES = ("id_rsa", "id_dsa", "id_ecdsa", "id_ed25519")
 # 这两个配置文件按内容判：只有真的写了凭据才计 SEC-2，报告里只出标记名、不出值。
 AUTH_GATED_NAMES = {".npmrc", ".pypirc"}
 AUTH_MARKER_RE = re.compile(r"(_auth\s*=|_authToken\s*=|password\s*=|token\s*=)")
+# 值写成「环境变量引用」时不是凭据：//registry.npmjs.org/:_authToken=${NPM_TOKEN} 是 npm
+# 官方推荐的写法，以前的判据只看标记名在不在，于是照它配的 .npmrc 被一票否决（A571 第 4 条）。
+ENV_REF_RE = re.compile(r"^\$\{")
+# 公钥后缀：前缀匹配 id_rsa 会连 id_rsa.pub、id_ed25519.pub 一起命中。公钥常出现在 ansible、
+# 部署文档与测试夹具里，一票否决项不能误伤（AUDIT 原则：误报代价比漏报大，A571 第 3 条）。
+PUBLIC_KEY_SUFFIX = ".pub"
+
+
+def is_public_key(low_name):
+    return low_name.endswith(PUBLIC_KEY_SUFFIX)
+
+
+def norm_allow(allow):
+    """把 --allow 的值统一成「仓库根相对、正斜杠、去 ./ 前缀、去尾斜杠」。
+
+    内容扫描与文件名扫描必须同一口径。旧版只在 iter_files 里归一化，`--allow tests/fixtures/`
+    与反斜杠写法豁免得了内容、豁免不了夹具里的 id_rsa，于是假阻断（A571 第 5 条）。
+    """
+    out = []
+    for a in allow:
+        a = a.replace("\\", "/")
+        if a.startswith("./"):
+            a = a[2:]
+        out.append(a.rstrip("/"))
+    return out
+
+
+def is_allowed(rel, allow):
+    return any(rel == a or rel.startswith(a + "/") for a in allow)
 
 
 def secret_name_hits(root, allow):
@@ -197,17 +226,20 @@ def secret_name_hits(root, allow):
     默认口径以前把这类文件只记成盲区，一个入库 id_rsa 的仓库仍然 100 分退 0。
     """
     out = []
+    allow = norm_allow(allow)
     for dp, dn, fns in os.walk(root):
         dn[:] = [d for d in dn if d not in SKIP_DIRS]
         for fn in sorted(fns):
             low = fn.lower()
+            if is_public_key(low):
+                continue
             ext = os.path.splitext(low)[1]
             if (ext not in SECRET_FILE_HARD and low not in SECRET_FILE_HARD_NAMES
                     and not low.startswith(SECRET_KEY_PREFIXES) and low not in AUTH_GATED_NAMES):
                 continue
             rel = os.path.relpath(os.path.join(dp, fn), root).replace("\\", "/")
             full = os.path.join(dp, fn)
-            if any(rel == a or rel.startswith(a + "/") for a in allow):
+            if is_allowed(rel, allow):
                 continue
             hard = (ext in SECRET_FILE_HARD or low in SECRET_FILE_HARD_NAMES
                     or low.startswith(SECRET_KEY_PREFIXES))
@@ -223,14 +255,25 @@ def secret_name_hits(root, allow):
 
 
 def auth_marker(full):
-    """读凭据配置文件，返回命中的标记名；读不到或没有标记就返回空串。只回标记，不回值。"""
+    """读凭据配置文件，返回第一个「真凭据形态」的标记名；否则空串。只回标记，不回值。
+
+    跳过三种：值为空、值是环境变量引用（`${NPM_TOKEN}`）、值是占位符（`<your-token>`）。
+    这三种都是官方推荐写法或示例，不是泄露。
+    """
     try:
         with open(full, "rb") as f:
             head = f.read(4096).decode("utf-8", "replace")
     except OSError:
         return ""
-    m = AUTH_MARKER_RE.search(head)
-    return m.group(1).split("=")[0].strip() if m else ""
+    for line in head.splitlines():
+        m = AUTH_MARKER_RE.search(line)
+        if not m:
+            continue
+        val = line.split("=", 1)[1].strip().strip("\"'")
+        if not val or ENV_REF_RE.match(val) or is_placeholder(val):
+            continue
+        return m.group(1).split("=")[0].strip()
+    return ""
 
 
 def blind_kind(entry):
@@ -294,8 +337,7 @@ def iter_files(root, include_docs, allow, skips=None):
     """
     if skips is None:
         skips = []
-    allow = [a.replace("\\", "/") for a in allow]
-    allow = [(a[2:] if a.startswith("./") else a).rstrip("/") for a in allow]
+    allow = norm_allow(allow)
     def _walk_error(err):
         # os.walk 默认吞掉不可读目录，那样「扫完了」是假的。
         skips.append("（目录不可读）" + str(getattr(err, "filename", err)))
@@ -312,7 +354,7 @@ def iter_files(root, include_docs, allow, skips=None):
         for fn in sorted(filenames):
             full = os.path.join(dirpath, fn)
             rel = os.path.relpath(full, root).replace("\\", "/")
-            if any(rel == a or rel.startswith(a + "/") for a in allow):
+            if is_allowed(rel, allow):
                 skips.append(rel + "（--allow 豁免）")
                 continue
             ext = os.path.splitext(fn)[1].lower()
@@ -531,12 +573,20 @@ def _self_test():
     # 完整的 "-----BEGIN … PRIVATE KEY-----" 或 "password = …" 字面量会让自己被一票否决。
     e2e = tempfile.mkdtemp(prefix="forge-audit-e2e-")
     def _w(name, text):
+        d = os.path.dirname(os.path.join(e2e, name))
+        if d:
+            os.makedirs(d, exist_ok=True)
         with open(os.path.join(e2e, name), "w", encoding="utf-8") as fh:
             fh.write(text)
     _w("id_ed25519.bak", "renamed key material\n")
+    _w("id_rsa.pub", "ssh-rsa AAAAB3NzaC1yc2 public half\n")
     _w("app.jks", "binary-ish\n")
     _w(".npmrc", "registry=https://registry.npmjs.org\n")
     _w(".pypirc", "[distutils]" + chr(10) + "pass" + "word = hunter2" + chr(10))
+    # 同一个 .npmrc 标记名，三种值：官方推荐的引用写法、占位符、真令牌。只有第三种该阻断。
+    _w("cfg_env/.npmrc", "//registry.npmjs.org/:" + "_auth" + "Token=" + "${NPM_" + "TOKEN}" + chr(10))
+    _w("cfg_ph/.npmrc", "//registry.npmjs.org/:" + "_auth" + "Token=" + "<your-token>" + chr(10))
+    _w("cfg_real/.npmrc", "//registry.npmjs.org/:" + "_auth" + "Token=" + "abcdefgh" + "ijkl1234" + chr(10))
     with open(os.path.join(e2e, "srv.pem"), "w", encoding="utf-8") as f:
         f.write("-----BEGIN " + "RSA PRIVATE KEY-----" + chr(10) + "MIIB" + chr(10))
     with open(os.path.join(e2e, "id_rsa"), "w", encoding="utf-8") as f:
@@ -556,11 +606,43 @@ def _self_test():
         helper_bad.append("只含 registry= 的 .npmrc 被误计成 SEC-2（一票否决项不该误报）")
     if "app.jks" in sec2:
         helper_bad.append(".jks 已退回盲区，不该再计 SEC-2")
+    # A571 第 3 条：前缀匹配不能把公钥一起否决
+    if "id_rsa.pub" in sec2:
+        helper_bad.append("id_rsa.pub 是公钥，不该按私钥一票否决")
+    if not any(h["file"] == "id_ed25519.bak" for h in _fd["SEC-2"]):
+        helper_bad.append("排除 .pub 之后，id_ed25519.bak 仍要被前缀匹配命中")
+    # A571 第 4 条：同一个 _authToken 标记，值形态不同结论就不同
+    if "cfg_env/.npmrc" in sec2:
+        helper_bad.append("_authToken=${NPM_TOKEN} 是 npm 官方推荐写法，不该计 SEC-2")
+    if "cfg_ph/.npmrc" in sec2:
+        helper_bad.append("_authToken=<your-token> 是占位符，不该计 SEC-2")
+    if "cfg_real/.npmrc" not in sec2:
+        helper_bad.append(".npmrc 里写了真令牌却没计 SEC-2（占位符过滤不能把真值也吃掉）")
     if blind_kind("srv.pem（密钥材料文件 .pem，内容不读）") == "excluded" \
             or not any("密钥材料" in s for s in _sk):
         helper_bad.append("iter_files 没把 .pem 记成密钥材料盲区：%s" % _sk)
     if not any(h["file"] == "id_rsa" for h in _fd["SEC-2"]):
         helper_bad.append("id_rsa 按文件名没计进 SEC-2，入库私钥仍会被放行")
+    # A571 第 5 条：--allow 的三种写法在文件名那一遍必须同样生效。旧版只在 iter_files 里
+    # 归一化，./ 前缀、尾斜杠、反斜杠都豁免得了内容、豁免不了夹具里的 id_rsa。
+    fx = tempfile.mkdtemp(prefix="forge-audit-allow-")
+    try:
+        os.makedirs(os.path.join(fx, "tests", "fixtures"), exist_ok=True)
+        with open(os.path.join(fx, "tests", "fixtures", "id_rsa"), "w", encoding="utf-8") as f:
+            f.write("-----BEGIN " + "OPENSSH PRIVATE KEY-----" + chr(10))
+        for spelling in ("./tests/fixtures/", "tests" + B + "fixtures",
+                         "tests" + B + "fixtures" + B, "tests/fixtures"):
+            _s3, _f3, _k3, _u3, _a3 = scan(fx, False, [spelling])
+            if _f3["SEC-2"]:
+                helper_bad.append("--allow %r 没豁免掉夹具里的 id_rsa：%s"
+                                  % (spelling, [x["file"] for x in _f3["SEC-2"]]))
+        _s4, _f4, _k4, _u4, _a4 = scan(fx, False, ["tests/other"])
+        if not any(x["file"] == "tests/fixtures/id_rsa" for x in _f4["SEC-2"]):
+            helper_bad.append("豁免写错目录时，夹具里的 id_rsa 应计 SEC-2 却没有：%s" % _f4["SEC-2"])
+    except OSError as e:
+        helper_bad.append("--allow 归一化自检没跑成：" + type(e).__name__)
+    finally:
+        shutil.rmtree(fx, ignore_errors=True)
     # 自扫护栏：把本文件复制进临时目录扫一遍。夹具里若留了未拆写的密钥字面量，
     # 本文件会被自己一票否决（A472 第 1 条就是这么被抓的，当时只有手工扫才发现）。
     own = tempfile.mkdtemp(prefix="forge-audit-own-")
