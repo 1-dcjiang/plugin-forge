@@ -66,12 +66,28 @@ python $S plugin-add --root <ROOT> --src <插件目录>       # 会同时报告 
 python $S serve     --root <ROOT>                        # 前台常驻（推荐，交给后台任务托管）
 #   或：python $S start --root <ROOT>                     # 起服务 → 等 /health → 返回
 python $S status    --root <ROOT>                        # health + /plugins + /plugin/status + /plugin/messages
-python $S stop      --root <ROOT>
+python $S stop      --root <ROOT>                        # 先验 pid 身份再动手，四种走向见下
 python $S plugin-rm --root <ROOT> --id <插件id>          # 撤掉插件，恢复 checkout 干净
 ```
 
 **为什么每次都要 sync**：官方仓库迭代很快（实测一次同步就落后 1 个提交）。拿旧源码验出来的结论，
 可能对应一个已经修掉的 bug——这类"验证过时"比没验证更糟。
+
+## stop 的四种走向
+
+`stop` 先读该 pid 的命令行，确认它真是沙箱服务才动手。机器重启后 pid 会被复用，
+验不出身份就开枪会打到宿主自己的进程。
+
+| 判定 | 行为 | 要 `--force` 吗 |
+|---|---|---|
+| 命令行里有 `user_plugin_server.py` | 杀掉进程树，清状态文件 | 不用 |
+| pid 已不存在（服务崩了，或 `start` 超时后自行终止） | 只清状态文件 | 不用 |
+| pid 属于别的进程（重启后复用） | 不杀，只清状态文件，并提示人工核对端口 | 不用，也不许用：force 的意思不是「是别人的进程也照杀」 |
+| 命令行读不到、进程还在 | 拒绝动手，报原因 | 核对端口归属后带 `--force` 重跑 |
+
+读命令行分平台：Windows 用一条 PowerShell 同时给出「进程在不在」与命令行；
+Linux 读 `/proc/<pid>/cmdline`；macOS 没有 `/proc`，退回 `ps -p <pid> -o command=`。
+2026-11-16 前 macOS 上这条永远读不到，于是每次 `stop` 都要 `--force`（外部深审 A571 第 2 条）。
 
 ## 隔离做了什么
 

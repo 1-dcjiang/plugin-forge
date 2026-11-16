@@ -640,43 +640,111 @@ def cmd_start(args):
         log("提示：若本环境用 job object 回收进程树，服务会随命令结束一起终止；此时改用 serve + 后台任务")
 
 
-def _pid_is_sandbox_server(pid):
+_PS_QUERY = ('if ($null -eq ($p = Get-CimInstance Win32_Process -Filter "ProcessId=%d")) '
+             "{ '##GONE##' } elseif ([string]::IsNullOrWhiteSpace($p.CommandLine)) "
+             "{ '##NOLINE##' } else { $p.CommandLine }")
+
+
+def _pid_cmdline(pid):
+    """读 pid 的命令行，返回 (cmd 或 None, 进程还在不在)。
+
+    读不到的两种情形必须分开（A571 第 2 条）。旧版都算「读不到」，于是服务崩了以后
+    stop 也要 --force 才清得掉状态文件：
+    - 进程已不存在：cmd=None, alive=False。
+    - 进程还在但命令行拿不到（PowerShell 缺失、被挡、超时、权限不足）：cmd=None, alive=True。
+    macOS 没有 /proc，所以非 Windows 分支要有 ps 兜底。旧版只读 /proc，判定恒为 None，
+    修好之后的拒绝逻辑因此让 macOS 上每一次 stop 都要 --force。
+    pid 先过 int() 再拼进 PowerShell 与 ps 的参数，不是命令注入面。
+    """
+    if os.name == "nt":
+        try:
+            r = subprocess.run(["powershell", "-NoProfile", "-Command", _PS_QUERY % int(pid)],
+                               capture_output=True, timeout=20)
+        except Exception:
+            return None, True
+        if r.returncode != 0:
+            return None, True
+        cmd = r.stdout.decode("utf-8", "replace").strip()
+        if cmd == "##GONE##":
+            return None, False
+        if cmd == "##NOLINE##":
+            return None, True
+        return (cmd or None), True
+    return _posix_cmdline(int(pid), _read_proc_cmdline, _run_ps)
+
+
+def _read_proc_cmdline(pid):
+    with open("/proc/%s/cmdline" % pid, "rb") as f:
+        return f.read()
+
+
+def _run_ps(pid):
+    """返回 (返回码, stdout 字节)。ps 的 -o command= 不带表头，整行就是命令行。"""
+    r = subprocess.run(["ps", "-p", str(pid), "-o", "command="],
+                       capture_output=True, timeout=20)
+    return r.returncode, r.stdout
+
+
+def _posix_cmdline(pid, read_proc, run_ps):
+    """先读 /proc，读不到再用 ps 分辨。两个取数动作由调用方注入，自检才能演 macOS。
+
+    报告 A571 第 2 条说的就是这个分支：旧版只读 /proc，而 macOS 根本没有 /proc，
+    于是判定永远是「读不到」，修好之后的拒绝逻辑反倒让每次 stop 都要 --force。
+    「读不到 /proc」不等于「进程不存在」，必须再问一次 ps 才能分账。
+    """
+    try:
+        raw = read_proc(pid)
+    except Exception:
+        raw = None            # FileNotFoundError（没有 /proc）与权限错误都走到这里，再问 ps
+    if raw and raw.strip():
+        return raw.decode("utf-8", "replace").replace(chr(0), " "), True
+    try:
+        code, out = run_ps(pid)
+    except Exception:
+        return None, True     # 连 ps 都跑不了（没装、被挡、超时）：按「读不到但进程可能还在」
+    if code != 0 or not out.strip():
+        return None, False    # ps 明确说这个 pid 不存在
+    return out.decode("utf-8", "replace").strip(), True
+
+
+def pid_verdict(cmd):
     """True = 命令行里有 user_plugin_server.py；False = 确认不是；None = 读不到，未知。
 
     机器重启后 pid 会被复用，只看 sandbox.json 的 pid 会误杀无关进程。
     """
-    try:
-        if os.name == "nt":
-            r = subprocess.run(
-                ["powershell", "-NoProfile", "-Command",
-                 "(Get-CimInstance Win32_Process -Filter \"ProcessId=%d\")"
-                 ".CommandLine" % int(pid)],
-                capture_output=True, timeout=20)
-            if r.returncode != 0:
-                return None
-            cmd = r.stdout.decode("utf-8", "replace")
-        else:
-            with open("/proc/%s/cmdline" % pid, "rb") as f:
-                cmd = f.read().decode("utf-8", "replace")
-    except Exception:
-        return None
-    if not cmd.strip():
+    if not cmd:
         return None
     return "user_plugin_server.py" in cmd
 
 
-def should_kill(verdict, force):
-    """该不该对这个 pid 下手。
+def stop_action(verdict, alive, force):
+    """cmd_stop 的四种走向。判定与执行分开，判定才能在 CI 里跑满全部组合。
 
-    True  = 命令行里真看见 user_plugin_server.py，杀。
-    False = pid 已被别人复用，不杀。
-    None  = 读不到命令行（PowerShell 缺失、被挡、超时，或 pid 已消失）。旧版走 else
-            分支照样 taskkill，等于「验不出身份就开枪」，正是这个保护要防的重启后复用场景。
-            现在只有明确 --force 才杀。
+    kill   = 动手杀：命令行确认是沙箱服务，或读不到但用户明确 --force。
+    gone   = pid 已不存在：没有进程可杀，直接清状态文件，不要 --force。
+    reuse  = pid 属于别人：不杀，只清状态。--force 也不越这条——force 的意思是
+             「读不到命令行也要杀」，不是「确认是别人的进程还照杀」。
+    refuse = 命令行读不到、进程还在：停下，让用户核对端口归属后带 --force 重跑。
+             旧版在这里 fail-open，伪造 pid 照样被 taskkill。
     """
+    if not alive:
+        return "gone"
+    if verdict is False:
+        return "reuse"
     if verdict is True:
-        return True
-    return bool(force) and verdict is None
+        return "kill"
+    return "kill" if force else "refuse"
+
+
+def _kill_pid(pid):
+    if os.name == "nt":
+        subprocess.call(["taskkill", "/PID", str(pid), "/T", "/F"],
+                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    else:
+        try:
+            os.kill(pid, 15)
+        except ProcessLookupError:
+            pass
 
 
 def cmd_stop(args):
@@ -685,27 +753,27 @@ def cmd_stop(args):
     pid = st.get("pid")
     if not pid:
         die("状态文件里没有 pid")
-    verdict = _pid_is_sandbox_server(pid)
-    if not should_kill(verdict, getattr(args, "force", False)):
-        if verdict is None:
-            die("读不到 pid=%s 的命令行（PowerShell 缺失、被挡、超时，或该 pid 已不存在），"
-                "拒绝杀进程：重启后 pid 会被复用，开枪会动到宿主的进程。"
-                "先核对端口归属，确认是沙箱服务再带 --force 重跑。" % pid)
-        log(f"pid={pid} 的命令行里没有 user_plugin_server.py，判定为 pid 复用，"
-            "不杀该进程；只清沙箱状态文件。若沙箱服务仍在，请手工核对端口后处理")
-    else:
+    cmd, alive = _pid_cmdline(pid)
+    verdict = pid_verdict(cmd)
+    action = stop_action(verdict, alive, getattr(args, "force", False))
+    if action == "refuse":
+        die("读不到 pid=%s 的命令行（PowerShell 缺失、被挡、超时），而该进程还在，"
+            "拒绝杀进程：重启后 pid 会被复用，开枪会动到宿主的进程。"
+            "先核对端口归属，确认是沙箱服务再带 --force 重跑。" % pid)
+    state_file = root / STATE_FILE
+    if action == "kill":
         if verdict is None:
             log("读不到 pid 的命令行，按 --force 的明确要求停止")
-        if os.name == "nt":
-            subprocess.call(["taskkill", "/PID", str(pid), "/T", "/F"],
-                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        else:
-            try:
-                os.kill(pid, 15)
-            except ProcessLookupError:
-                pass
-    (root / STATE_FILE).unlink(missing_ok=True)
-    log(f"已停止 pid={pid}")
+        _kill_pid(pid)
+        state_file.unlink(missing_ok=True)
+        log(f"已停止 pid={pid}")
+    elif action == "gone":
+        state_file.unlink(missing_ok=True)
+        log(f"pid={pid} 的进程已不存在（服务已退出或中途崩了），只清理状态文件")
+    else:
+        state_file.unlink(missing_ok=True)
+        log(f"pid={pid} 的命令行里没有 user_plugin_server.py，判定为 pid 复用，"
+            "不杀该进程；状态文件已清理。若沙箱服务仍在，请手工核对端口后处理")
 
 
 def _plugin_rows(payload):
@@ -841,15 +909,57 @@ def _self_test():
     for good_id in ("my_plugin", "GalgamePlugin", "a1"):
         if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", good_id):
             bad.append("id 校验误杀 " + good_id)
-    # 2026-11-15 补：kill 判定的六种组合。旧版 None 走 else 分支照样 taskkill。
-    kill_cases = [(True, False, True), (True, True, True),
-                  (False, False, False), (False, True, False),
-                  (None, False, False), (None, True, True)]
-    for verdict, force, want in kill_cases:
-        got = should_kill(verdict, force)
+    # 2026-11-16 补（A571 第 2 条）：stop 判定的全组合。判定与执行分开以后，才能在 CI 里
+    # 跑满 verdict(3) × alive(2) × force(2) = 12 组。旧表只有 6 组，而且没有 alive 这一维，
+    # 所以「进程已不存在」与「命令行读不到」两种情形混在一起，macOS 全红也没人发现。
+    stop_cases = [
+        (True, True, False, "kill"), (True, True, True, "kill"),
+        (True, False, False, "gone"), (True, False, True, "gone"),
+        (False, True, False, "reuse"), (False, True, True, "reuse"),
+        (False, False, False, "gone"), (False, False, True, "gone"),
+        (None, True, False, "refuse"), (None, True, True, "kill"),
+        (None, False, False, "gone"), (None, False, True, "gone"),
+    ]
+    for verdict, alive, force, want in stop_cases:
+        got = stop_action(verdict, alive, force)
         if got != want:
-            bad.append("kill 判定 verdict=%s force=%s 得到 %s 期望 %s" % (verdict, force, got, want))
-    total = len(keep) + len(drop) + 9 + len(kill_cases) + _symlink_cases(bad)
+            bad.append("stop 判定 verdict=%s alive=%s force=%s 得到 %s 期望 %s"
+                       % (verdict, alive, force, got, want))
+    # 命令行 → 判定：读不到是 None（要 --force 或按 gone 处理），身份不符才是 False
+    for cmd, want in ((None, None), ("", None),
+                      ("/usr/bin/python3 /srv/user_plugin_server.py", True),
+                      ("C:" + chr(92) + "Windows" + chr(92) + "explorer.exe", False)):
+        got = pid_verdict(cmd)
+        if got is not want:
+            bad.append("pid_verdict(%r) 得到 %s 期望 %s" % (cmd, got, want))
+    # 2026-11-16 补（A571 第 2 条）：POSIX 分支的平台形状。macOS 没有 /proc，旧版只读 /proc，
+    # 于是判定恒为「读不到」。这里用注入的取数函数演三种平台，Windows 上也能跑这一条。
+    ZERO = b"\0"
+
+    def _no_proc(pid):
+        raise FileNotFoundError(2, "No such file or directory")
+
+    def _no_ps(pid):
+        raise OSError("ps 不可用")
+    posix_cases = [
+        (lambda pid: b"/usr/bin/python3" + ZERO + b"/srv/user_plugin_server.py" + ZERO,
+         None, True, True),                                        # Linux：/proc 读到了
+        (_no_proc, lambda pid: (0, b"/usr/bin/python3 /srv/user_plugin_server.py"),
+         True, True),                                             # macOS：没有 /proc，退回 ps
+        (_no_proc, lambda pid: (1, b""), None, False),            # ps 明确说这个 pid 不存在
+        (_no_proc, lambda pid: (0, b"/usr/sbin/cron -n"), False, True),  # 进程在，但不是沙箱服务
+    ]
+    for read_proc, run_ps, want_verdict, want_alive in posix_cases:
+        cmd, alive = _posix_cmdline(4321, read_proc, run_ps)
+        if pid_verdict(cmd) is not want_verdict or alive is not want_alive:
+            bad.append("POSIX 分支：verdict=%s alive=%s 期望 verdict=%s alive=%s（cmd=%r）"
+                       % (pid_verdict(cmd), alive, want_verdict, want_alive, cmd))
+    # 连 ps 都跑不了（没装、被挡、超时）：算「读不到但进程可能还在」，不能算「已不存在」
+    cmd, alive = _posix_cmdline(4321, _no_proc, _no_ps)
+    if pid_verdict(cmd) is not None or alive is not True:
+        bad.append("ps 跑不了时应为「读不到但进程可能还在」，实得 verdict=%s alive=%s"
+                   % (pid_verdict(cmd), alive))
+    total = len(keep) + len(drop) + 9 + len(stop_cases) + 4 + len(posix_cases) + 1 + _symlink_cases(bad)
     print("SANDBOX SELF-TEST: %s（%d 项）" % ("PASS" if not bad else "FAIL", total))
     for m in bad:
         print("  FAIL:", m)
