@@ -57,7 +57,8 @@ scripts/           generate_roster_tables.py（名册表生成）+ session_capab
                    + profile_drift.py（profile 锚点漂移核对，读上游当前 main；仓库维护面，不装进宿主）
 roster.json        团队名册唯一来源
 .github/           sync-check CI：名册漂移、门禁自检
-AUDIT.md LICENSE
+AUDIT.md NOTICE LICENSE
 ```
 
-MIT，第三方摘要署名见 LICENSE 与 AUDIT.md。
+MIT（完整正文在 `LICENSE`）。第三方摘要署名与设计致谢见 `NOTICE` 与 AUDIT.md：`NOTICE` 不是许可的一部分，
+不给上面的授权加条件。
