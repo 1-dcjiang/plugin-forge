@@ -177,7 +177,8 @@ def cmd_doctor(args):
     def add(name, ok, detail=""):
         checks.append((name, ok, detail))
 
-    add("python", sys.version_info >= (3, 10), sys.version.split()[0])
+    py_ok = sys.version_info >= (3, 10)
+    add("python", py_ok, sys.version.split()[0])
     add("git", bool(shutil.which("git")), shutil.which("git") or "未找到")
     uv = shutil.which("uv")
     add("uv（可选，官方推荐）", uv is not None, uv or "未安装，将回退 pip")
@@ -189,8 +190,7 @@ def cmd_doctor(args):
 
     for name, ok, detail in checks:
         print(f"  [{'OK ' if ok else 'WARN'}] {name}: {detail}")
-    hard_fail = [c for c in checks[:1] if not c[1]]
-    if hard_fail:
+    if not py_ok:                      # 位置耦合曾在这里：checks[0] 一换位就查错项
         die("Python 版本不足（需 ≥3.10）")
 
 
@@ -224,12 +224,11 @@ def cmd_prepare(args):
     else:
         if repo.exists():
             die(f"{repo} 已存在但不是有效仓库，请先清理")
-        log(f"克隆 {args.repo_url} → {repo}")
-        cmd = ["git", *GIT_HTTP_OPTS, "clone", "--depth", "1"]
-        if args.ref:
-            cmd += ["--branch", args.ref]
-        cmd += [args.repo_url, str(repo)]
-        rc = subprocess.call(cmd)
+        # 克隆源固定为官方仓库。想挂 fork 或钉版本：自己 clone 到任意目录，再用 --repo 指过来；
+        # sync 读的是那个仓库自己的 origin，所以 fork 一样能跟。
+        log(f"克隆 {REPO_URL} → {repo}")
+        rc = subprocess.call(["git", *GIT_HTTP_OPTS, "clone", "--depth", "1",
+                              REPO_URL, str(repo)])
         if rc != 0:
             die("克隆失败（代理/网络）。可先用别的方式取到源码，再用 --repo 指向它")
         save_config(root, {"repo": str(repo), "mode": "cloned"})
@@ -355,7 +354,7 @@ def cmd_install(args):
     rc = subprocess.call([str(py), "-m", "pip", "install",
                           "--disable-pip-version-check", "-r", str(req)], cwd=str(repo))
     if rc != 0:
-        if not getattr(args, "insecure_pip", False):
+        if not args.insecure_pip:
             die("依赖安装失败（多为代理根证书导致的 SSL 校验失败）。这里不静默关校验：\n"
                 "  首选修证书链，或给 pip / uv 指定 CA（PIP_CERT、UV_NATIVE_TLS）；\n"
                 "  确认这台机器可以接受不校验 TLS 的下载后，再显式加 --insecure-pip 重跑。")
@@ -581,9 +580,6 @@ def cmd_serve(args):
     args.port_resolved = pick_port("127.0.0.1", args.port)
     env = _server_env(root, args)
     log_file = root / "logs" / f"server-{time.strftime('%Y%m%d-%H%M%S')}.log"
-    save_state(root, {"pid": os.getpid(), "port": args.port_resolved, "root": str(root),
-                      "repo": str(repo), "log": str(log_file), "mode": "serve",
-                      "started_at": time.strftime("%Y-%m-%d %H:%M:%S")})
     log(f"前台服务  port={args.port_resolved}  log={log_file}")
     log("就绪后可用 status 检查；结束用 stop 或终止本任务")
     fh = open(log_file, "w", encoding="utf-8", errors="replace")
@@ -852,7 +848,7 @@ def cmd_stop(args):
         die("状态文件里没有 pid")
     cmd, alive = _pid_cmdline(pid)
     verdict = pid_verdict(cmd)
-    action = stop_action(verdict, alive, getattr(args, "force", False))
+    action = stop_action(verdict, alive, args.force)
     if action == "refuse":
         die("读不到 pid=%s 的命令行（PowerShell 缺失、被挡、超时），而该进程还在，"
             "拒绝杀进程：重启后 pid 会被复用，开枪会动到宿主的进程。"
@@ -861,7 +857,7 @@ def cmd_stop(args):
     if action == "kill":
         if verdict is None:
             log("读不到 pid 的命令行，按 --force 的明确要求停止")
-        if _kill_pid(pid, getattr(args, "force", False)):
+        if _kill_pid(pid, args.force):
             state_file.unlink(missing_ok=True)
             log(f"已停止 pid={pid}")
         else:
@@ -912,6 +908,9 @@ def _plugin_rows(payload):
 # 早先这里探的是 /runs 和 /messages —— 两个 GET 都不能当探活路由：GET /runs（集合）405，
 # 集合只有 POST（runs.py:35）；单个 run 虽有 GET /runs/{run_id}（runs.py:44），但要先有 run_id。
 # /messages 根本没这个路径，会 404。看的人会以为是插件的问题。
+# 每行的第二个字段是上游返回体里放列表的键。三条都实测过：
+# /plugins 是 {plugins, message}，/plugin/status 是 {plugins, time}，/plugin/messages 是
+# {messages, count, time}。计数只按这个键取，不再猜 items/data 这类不存在的外形。
 STATUS_ROUTES = (
     ("/plugins", "plugins"),
     ("/plugin/status", "plugins"),
@@ -938,7 +937,7 @@ def cmd_status(args):
         c, b = http_get(port, path, timeout=5)
         n = "?"
         if isinstance(b, (list, dict)):
-            items = b if isinstance(b, list) else (b.get(label) or b.get("items") or b.get("data") or [])
+            items = b if isinstance(b, list) else (b.get(label) or [])
             n = len(items) if isinstance(items, (list, dict)) else "?"
         print(f"  {path} -> HTTP {c}  items={n}")
         for pid, pst in _plugin_rows(b)[:20]:
@@ -952,9 +951,8 @@ def _symlink_cases(bad):
     悬空软链是外部深审 A472 第 6 条：旧代码先问 is_dir()，悬空链接被当成「不存在」，
     清不掉。造不了符号链接的机器（Windows 无权限）跳过并说明，不算失败。
     """
-    import pathlib
     import tempfile
-    td = pathlib.Path(tempfile.mkdtemp(prefix="sb-symlink-"))
+    td = Path(tempfile.mkdtemp(prefix="sb-symlink-"))
     n = 0
     try:
         (td / "gone").symlink_to(td / "missing")
@@ -1122,9 +1120,7 @@ def main():
 
     p = sub.add_parser("prepare", help="挂载已有源码或克隆官方仓库，并建隔离目录")
     p.add_argument("--root", required=True)
-    p.add_argument("--repo", default=None, help="已有的 N.E.K.O 源码目录（推荐，免克隆）")
-    p.add_argument("--repo-url", default=REPO_URL)
-    p.add_argument("--ref", default=None)
+    p.add_argument("--repo", default=None, help="已有的 N.E.K.O 源码目录（推荐，免克隆）；fork 与钉版本也走这条路")
     p.set_defaults(func=cmd_prepare)
 
     y = sub.add_parser("sync", help="拉取官方最新源码（官方迭代快，跑前先同步）")
@@ -1134,7 +1130,9 @@ def main():
 
     i = sub.add_parser("install", help="安装依赖到沙箱 venv")
     i.add_argument("--root", required=True)
-    i.add_argument("--python", default=None, help="用于创建 venv 的解释器（默认当前解释器，建议 3.11）")
+    i.add_argument("--python", default=None,
+                   help="建 venv 用的解释器路径。给了就用它。没给时 uv 走 --py-version（默认 3.11），"
+                        "pip 走当前解释器")
     i.add_argument("--no-uv", action="store_true", help="禁用 uv，强制用 pip（排障用）")
     i.add_argument("--insecure-pip", dest="insecure_pip", action="store_true",
                    help="pip 首次失败后允许用 --trusted-host 关闭 TLS 校验重试（有中间人风险，"
