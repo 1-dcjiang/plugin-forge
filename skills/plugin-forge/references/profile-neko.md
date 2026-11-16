@@ -11,7 +11,7 @@ gh api repos/Project-N-E-K-O/N.E.K.O/contents/scripts/custom_channels/neko_chann
 - 本机宿主版本已含切换点 → 同 404 处理。
 - **最近一次核验：2026-11-14 复跑本命令返回 404**。#3705 于当天把切换点合入 main，删除了 `scripts/custom_channels/neko_channel.py`，该目录已空。按上一条规则，§3/§7 本应按过期面处理，但 **2026-11-15 已对本轮触及的锚点对 main `acfbdbc50` 逐条重核**（各 `[FACT]` 标该 sha）；未标 sha 或标 `[未核验]` 的仍按上一条规则先重核再引用。
 - 更早的核验记录：2026-11-11（sha 85ea534）当时判为有效。**历史记录不是时效证明。**
-- 同日的市场兼容快照（逐行证据与 commit SHA 在 neko-plugin-workshop `market-corpus/compat-v2/`，<https://github.com/fengdiehualian/neko-plugin-workshop> PR#5）：144 个在架插件三态标注，现在就坏 1、将坏 0、有兜底会降级 1、仅文档/测试面 4、待核 11、兼容 127。这组数随市场变，引用前按快照的 scan_date 重跑三步。
+- 同日的市场兼容快照（逐行证据与 commit SHA 在 neko-plugin-workshop `market-corpus/compat-v2/`，见 <https://github.com/fengdiehualian/neko-plugin-workshop> PR#5。注意：PR#5 于 2026-11-16 核对为「已关闭、未合并」，该目录只在那条分支上，main 里没有。引用前先确认它可得，不可得就重跑三步）：144 个在架插件三态标注，现在就坏 1、将坏 0、有兜底会降级 1、仅文档/测试面 4、待核 11、兼容 127。这组数随市场变，引用前按快照的 scan_date 重跑三步。
 - **2026-11-11 基线推进到 0984249**（#3686 合入）：diff 文件清单核对——改动全部落在
   memory/long_term_sync/chat_sync/prompts/locales 内部，插件契约（48916、/runs、SDK 装饰器、
   user_plugin_server 入口、/health）零变化，当时 §3/§7 结论维持有效（仅对 0984249 基线成立，其后切换点已进 main，见上面 2026-11-14 记录）。
