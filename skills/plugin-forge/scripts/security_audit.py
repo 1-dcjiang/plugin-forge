@@ -134,9 +134,13 @@ MIN_SECRET_LEN = 8       # 再短会被示例值淹没；短于此的口令是�
 
 
 def secret_assignments(line):
-    """返回 [(列, 键名, 值)]。值是代码引用时跳过，见 CODE_VALUE_RE。"""
+    """返回 [(列, 键名, 值)]。值是代码引用时跳过，见 CODE_VALUE_RE。
+
+    `@?` 是给 Objective-C 与 C# 的 @"..." 字面量留的口子。没有它，`NSString *token = @"口令"`
+    整个不匹配：值字符类在 `"` 前就撞上 `@`，取到的值只剩一个字符。`.m` 进池之后实测漏的就是这条。
+    """
     out = []
-    pat = (r'([A-Za-z0-9_.$-]{2,})[\'"]?\s*[:=]\s*[\'"]?'
+    pat = (r'([A-Za-z0-9_.$-]{2,})[\'"]?\s*[:=]\s*@?[\'"]?'
            r'([^\'"\s,;{}()]{%d,})' % MIN_SECRET_LEN)
     for m in re.finditer(pat, line):
         key, val = m.group(1), m.group(2)
@@ -504,6 +508,9 @@ def _self_test():
         ("SEC-2", K.upper() + ' = "your_' + "secret" + '_here1"', False),
         ("SEC-2", K + ' = "' + "changeme" + '"', False),
         ("SEC-2", TK + ' = "' + "x" * 15 + '"', False),
+        # Objective-C / C# 的 @"..." 字面量。.m 进池后实测到这条漏网：值前多一个 @，旧模式整个不匹配。
+        ("SEC-2", "NSString *token = @\"" + V + '";', True),
+        ("SEC-2", "NSString *token = @\"sh" + '";', False),
         ("SEC-2", "the pass" + "word field is documented only", False),
         # 驼峰、粘连、裸 token、URL 内嵌凭据：旧的万能正则四种全漏。
         ("SEC-2", 'user' + 'Password = "' + V + '"', True),
