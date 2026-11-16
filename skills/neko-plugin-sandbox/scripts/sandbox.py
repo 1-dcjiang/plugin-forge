@@ -1097,8 +1097,89 @@ def _self_test():
                nap=lambda s: None, steps=NT_WAIT_STEPS)
     if len(nt_calls) > 5:
         bad.append("Windows 的探测格子太密：跑了 %d 次 PowerShell 形状的探测" % len(nt_calls))
+    # A464 第 13 条欠的三组用例：toml 读段、_plugin_rows、超时夹紧。本轮全补上。
+    # 第一组钉的是「别按行首是 id 就认」这个老坑：[plugin.ui] 的键不能替 [plugin] 回答。
+    x_tomls = [
+        ('[plugin]\nid = "demo"\n', "plugin", "id", "demo"),
+        ("[plugin]\nid = 'sq'\n", "plugin", "id", "sq"),
+        ('[plugin]\nid = "demo"  # 尾巴注释\n', "plugin", "id", "demo"),
+        ('[other]\nid = "wrong"\n[plugin]\nid = "right"\n', "plugin", "id", "right"),
+        ('[plugin]\nid = "x"\n[plugin.ui]\nid_panel = "p"\n', "plugin.ui", "id", None),
+        ('[plugin]\nid = "x"\n[plugin.ui]\nid_panel = "p"\n', "plugin", "id_panel", None),
+        ('[plugin_runtime]\nauto_start = true\n', "plugin_runtime", "auto_start", "true"),
+        ('[plugin_runtime]\nauto_start = false\n', "plugin_runtime", "auto_start", "false"),
+        ('[plugin]\nversion = "1"\n', "plugin", "id", None),
+    ]
+    for x_txt, x_sec, x_key, x_want in x_tomls:
+        x_got = toml_section_value(x_txt, x_sec, x_key)
+        if x_got != x_want:
+            bad.append("toml_section_value(%s.%s) 期望 %r，得到 %r" % (x_sec, x_key, x_want, x_got))
+    x_flags = [("[plugin_runtime]\nauto_start = true\n", True),
+               ("[plugin_runtime]\nauto_start = True\n", True),
+               ("[plugin_runtime]\nauto_start = 1\n", True),
+               ("[plugin_runtime]\nauto_start = false\n", False),
+               ("[plugin_runtime]\nauto_start = 0\n", False),
+               ('[plugin]\nid = "x"\n', None)]      # 没写要回 None，调用方要分得开「显式 false」
+    for x_txt, x_wf in x_flags:
+        x_gf = toml_section_flag(x_txt, "plugin_runtime", "auto_start")
+        if x_gf != x_wf:
+            bad.append("auto_start 形状 %r 期望 flag=%r，得到 %r" % (x_txt.strip(), x_wf, x_gf))
+    # 第二组用真机抓回来的两种外形：/plugins 是 list，/plugin/status 是以 id 为键的 dict
+    x_rows = [
+        ({"plugins": [{"plugin_id": "a", "status": "running"}], "message": ""},
+         [("a", "running")]),
+        ({"plugins": {"b": {"status": "stopped"}}, "time": "t"}, [("b", "stopped")]),
+        ({"plugins": {"c": {"runtime_load_state": "failed"}}}, [("c", "failed")]),
+        ({"plugins": [{"id": "d", "state": "running"}]}, [("d", "running")]),
+        ({"plugins": {"e": "plain string"}}, [("e", "plain string")]),
+        ({"plugins": [{}]}, [("?", "?")]),
+        ({"plugins": None}, []),
+        ([], []),
+        ("不是 dict", []),
+    ]
+    for x_payload, x_wr in x_rows:
+        x_gr = _plugin_rows(x_payload)
+        if x_gr != x_wr:
+            bad.append("_plugin_rows(%r) 期望 %r，得到 %r" % (x_payload, x_wr, x_gr))
+    # 第三组：上游 plugin/settings.py:790 对 >300 直接 raise，服务在 import 阶段就崩。
+    x_env0 = os.environ.get("NEKO_PLUGIN_STARTUP_TIMEOUT")
+    x_hosted0 = os.environ.get("NEKO_PLUGIN_HOSTED_BY_AGENT")
+    os.environ["NEKO_PLUGIN_HOSTED_BY_AGENT"] = "1"   # 不带进来就验不出「清掉」这一步
+    import tempfile                      # 模块层不引 tempfile，只有自检用得到（与 _symlink_cases 同一口径）
+    x_root = Path(tempfile.mkdtemp(prefix="sb-env-"))
+    x_n = 0
+    try:
+        x_a = argparse.Namespace(plugin_startup_timeout=360.0, port_resolved=43117,
+                                 isolate_home=True)
+        x_e = _server_env(x_root, x_a)
+        if float(x_e["NEKO_PLUGIN_STARTUP_TIMEOUT"]) != 300.0:
+            bad.append("360 应夹到 300，实得 %s" % x_e["NEKO_PLUGIN_STARTUP_TIMEOUT"])
+        x_n += 1
+        if not (x_root / "state" / "LocalAppData").is_dir():
+            bad.append("isolate_home=True 没建出 LocalAppData 数据根")
+        x_n += 1
+        if x_e.get("NEKO_PLUGIN_HOSTED_BY_AGENT") is not None:
+            bad.append("NEKO_PLUGIN_HOSTED_BY_AGENT 没被清掉")
+        x_n += 1
+        for x_in, x_want2 in (("45", 45.0), ("600", 300.0), ("abc", 300.0)):
+            os.environ["NEKO_PLUGIN_STARTUP_TIMEOUT"] = x_in
+            x_g2 = float(_server_env(x_root, x_a)["NEKO_PLUGIN_STARTUP_TIMEOUT"])
+            if x_g2 != x_want2:
+                bad.append("环境带进 %s 时应生效 %g，实得 %g" % (x_in, x_want2, x_g2))
+            x_n += 1
+    finally:
+        if x_hosted0 is None:
+            os.environ.pop("NEKO_PLUGIN_HOSTED_BY_AGENT", None)
+        else:
+            os.environ["NEKO_PLUGIN_HOSTED_BY_AGENT"] = x_hosted0
+        if x_env0 is None:
+            os.environ.pop("NEKO_PLUGIN_STARTUP_TIMEOUT", None)
+        else:
+            os.environ["NEKO_PLUGIN_STARTUP_TIMEOUT"] = x_env0
+        shutil.rmtree(x_root, ignore_errors=True)
     total = (len(keep) + len(drop) + 9 + len(stop_cases) + 4 + len(posix_cases) + 1
-             + len(stat_cases) + len(alive_cases) + 4) + _symlink_cases(bad)
+             + len(stat_cases) + len(alive_cases) + 4 + len(x_tomls) + len(x_flags)
+             + len(x_rows) + x_n) + _symlink_cases(bad)
     print("SANDBOX SELF-TEST: %s（%d 项）" % ("PASS" if not bad else "FAIL", total))
     for m in bad:
         print("  FAIL:", m)

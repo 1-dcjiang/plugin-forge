@@ -123,7 +123,7 @@ N.E.K.O 服务与 git/uv/pip 都不读它们。自检名单随之扩充（项数
 | 10 1MB–50MB 上游文件被判「404 已删」 | 属实。抽成 `body_state()`：`None` 才是 missing，200 无正文是 big，归「无法判定」并进自检三例 |
 | 11 CI 没写 permissions | 已加 `permissions: contents: read`。actions 仍按 tag 引用，改 SHA 固定属供应链加固的另一件事，未在本轮 |
 | 12 contract.md 同一行既写「我落盘」又写「我不代写」 | 属实。改成一人认领：契约审议师出裁决文本，主理人写文件，`issued_by` 是自证字符串不当凭据（指向 issue #4） |
-| 13 sandbox 自检覆盖面窄 | 属实，未在本轮补：`toml_section_value`、`_plugin_rows`、超时夹紧、pid 复用判断仍无用例 |
+| 13 sandbox 自检覆盖面窄 | 属实。`pid` 复用判断在 A571 轮关闭，`toml_section_value`、`_plugin_rows`、超时夹紧在 2026-11-16 精简轮收尾关闭，见「A464 第 13 条收尾」 |
 | 14 `password = user_input_value` 误报 | 已知取舍，`references/security-checklist.md` 已写明。报告建议的「右值像普通变量名就降级提示」是产品建议，未做 |
 
 反向对照（撤掉修复看自检是否报错）：撤掉 `secret_name_hits` 的接入 → `SELF-TEST FAIL: id_rsa 按文件名没计进 SEC-2，入库私钥仍会被放行`。实跑口径：含 `id_rsa` 与 `server.pfx` 的目录 → SEC-2 2 处、85/100、阻断退出 2；只含 `cert.pem` 与 `app.key` 的目录 → 不阻断，但真盲区 2，`--fail-unclear` 退 3。
@@ -225,7 +225,7 @@ generate_roster_tables.py 的头两处少报了自己的写范围与模式清单
 - session_capability_refresh.py 的 `inp`（解析 stdin 却没人读）与 `build_context` 的 `truncated` 形参。两处都是真死代码，各一行能改完。这个文件是每次会话都要跑的 SessionStart hook，没有自检，CI 只做语法检查，部署副本另在 `~/.workbuddy/hooks/`，而它自己的 §6 降级契约文本受解冻窗口纪律管。本轮不动，等作者点名开那个窗口。
 
 盲区，照实说：
-- `cmd_serve`、`cmd_start`、`cmd_doctor`、`cmd_status` 四个命令体没有自检覆盖（要真起进程或读环境）。第 1、3、8 条改在这里，已在 Windows 与 Linux(WSL) 两端实测，见下面「双端对照探针」。`cmd_start` 的 `_wait_health` 与 DETACHED 分支本轮没跑到，仍只有读证。
+- `cmd_serve`、`cmd_start`、`cmd_doctor`、`cmd_status` 四个命令体没有自检覆盖（要真起进程或读环境）。第 1、3、8 条改在这里，已在 Windows 与 Linux(WSL) 两端实测，见下面「双端对照探针」。它们调用的辅助函数（`_server_env` 的超时夹紧、`_plugin_rows`、`toml_section_*`）现在有用例了。`cmd_start` 的 `_wait_health` 与 DETACHED 分支仍只有读证。
 - `_pid_really_alive` 是 stop 路径上唯一没有用例的探针。CI 跑 ubuntu，Windows 分支不跑它，自检注入的是别的函数。本轮没补：补它要先给它加注入接缝，那是加东西而不是精简。记在这里待办。
 - roster.json 的「零读者」只在本仓库与本机可证。团队外部工具若读 `profession_zh`，这次删除会打断它。本仓库 66 个文件、三面装机副本、pf-report 工具都搜过，无命中。
 - 装机三面本轮已同步：三面各写 22 个文件，第二遍预演报 0 写入，三面的门禁、扫描器、沙箱自检各自跑通。回滚备份 `pf-report/install-backup-20261116T161829`。`references/profile-dsh.md` 按本机独有保留，未推送。
@@ -261,12 +261,34 @@ generate_roster_tables.py 的头两处少报了自己的写范围与模式清单
 旧写法那一行就是本轮砍掉的东西：包装进程自己的 pid 被写成服务 pid，进程树一断它就等 pid 复用。
 两端同结果，说明这条修正不依赖平台分支。doctor 那行同时证明砍掉 `checks[:1]` 之后判定不再靠位置。
 
+### A464 第 13 条收尾（2026-11-16 22:40，本机）
+
+上面 A464 第 13 条欠的四项里，`pid` 复用在 A571 轮关闭，其余三项本轮补完。用例形状取自
+21:42 那次真机跑回来的实际返回体，不是照代码想象。
+
+- `toml_section_value` 9 例。钉住「别按行首是 id 就认」这个老坑：`[other]` 段的 `id` 不答，
+  `[plugin.ui]` 段的 `id_panel` 不答 `[plugin].id`，反过来也不答。带引号、单引号、行尾注释都验。
+- `toml_section_flag` 6 例。`true/True/1` 判 True，`false/0` 判 False，**没写返回 None**。
+  省略与显式 false 在上游语义里同为不启动，但调用方要分得开，所以不回落到 False。
+- `_plugin_rows` 9 例。两种真外形都进：`/plugins` 的 list 与 `/plugin/status` 的 id 键 dict。
+  另验 `runtime_load_state` 兜底、裸字符串值、空 dict、`plugins=null`、payload 不是 dict。
+- 超时夹紧 6 例，走 `_server_env` 真函数：命令行 360 夹到 300。环境带进 45 以 45 为准。
+  环境带进 600 也夹到 300。环境值读不成数字时退回命令行值再夹。`isolate_home` 建出
+  `state/LocalAppData`。`NEKO_PLUGIN_HOSTED_BY_AGENT` 被清掉（这条先把变量带进环境才验得出）。
+
+反向对照 6 组全部变红（`forge-scratch/run_controls3.py`）：忽略段名、rows 只认 list、不夹紧、
+省略回落 False、不清嵌入标志、不建数据根，每种破坏都被咬住。
+沙箱自检从 106 项升到 136 项。其余四个脚本的用例数不变。老控制组 12 组与精简轮 3 组复跑仍全部变红。
+
 ### 往 coopanion-forge 搬的结论
 
 沙箱这一件没有可搬的东西。那仓的内核清单 18 个目标里没有沙箱件，`find` 搜不到 `sandbox.py`，
 `skills/coopanion-forge/scripts/` 只有门禁与扫描器两件。N.E.K.O 沙箱是本仓的平台资产，不在内核同步面里。
 
-门禁那条 glob 修正相反，它是 delta 目标，已随基线 `2d658a7` 落地（那边 HEAD `65364c5`，已推，CI 过）。
+门禁那条 glob 修正相反，它是 delta 目标，已随基线 `2d658a7` 落地（那边当时 HEAD `65364c5`，已推，CI 过）。
+本条写完之后作者点头推了 tag：远端现在有 `v2.7.5` → `4f04414`，此前远端一个 tag 都没有。
+那边随后自己又走了一步（HEAD 现为 `8c88381`，CI 过），并在 deltas 里留下两条等 v2.7.5 的临时钉法。
+本轮没有在那边跑 `--apply`：它自己报「一致 15 / 需搬 1 / 缺件 0 / 替换失败 2」，而 `--apply` 不是原子的，死锚仍会写别的文件。那是那个会话正在活的仓。
 本轮核过的证据：那边的 `compile_glob` 函数体已无 `?` 与 `[` 分支，docstring 与 5 条新用例都在，
 门禁 `--self-test` PASS，`sync_kernel.py --check` 报「一致 18 / 需搬 0 / 缺件 0 / 替换失败 0」，
 `tools/gen_deltas.py --check` 报 7 个目标 18 处替换一致。
