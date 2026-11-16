@@ -29,13 +29,19 @@ import sys, os, re, json, argparse, tempfile, shutil
 SKIP_DIRS = {".git", "node_modules", "__pycache__", ".venv", "venv", "dist",
              "build", ".pytest_cache", ".mypy_cache", ".tox"}
 # 这份扩展名池定义「什么算代码」，只服务于内容扫描。契约门禁另有一份 CODE_EXTS，
-# 那份的用途是「什么算受保护文件」，两处用途不同、成员也不同（门禁多 .svg/.m/.jl 等）。
-# 改这里不必修那里，但别把两份当成同一件事。依据记在 AUDIT.md。
+# 那份的用途是「什么算受保护文件」。两处用途不同，成员也不等价：门禁还管无扩展名文件、
+# shebang 文件、hooks.json 与构建文件，本池还管 .ipynb 与各类脚本。
+# 2026-11-17 起 .svg .htm .m .jl 两边都有。以前只有门禁认它们，扫描器不读内容，
+# 那四类就成了「受保护却不被检查」的缝。改任何一份都要另核一遍这条缝有没有重新张开。
 CODE_EXTS = {".py", ".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs", ".vue", ".svelte",
              ".rs", ".go", ".java", ".kt", ".kts", ".scala", ".swift", ".c", ".h",
              ".cc", ".cpp", ".cxx", ".hpp", ".cs", ".rb", ".php", ".lua", ".pl",
              ".ex", ".exs", ".erl", ".dart", ".sh", ".bash", ".zsh", ".fish",
-             ".ps1", ".psm1", ".bat", ".cmd", ".sql", ".ipynb"}
+             ".ps1", ".psm1", ".bat", ".cmd", ".sql", ".ipynb",
+             # 2026-11-17 补：这四类门禁早就当受保护文件，扫描器却不读它们的内容，
+             # 密钥与 eval 写在里面就等于不存在（A571 第 1 条那个反向缺口的另一半）。
+             # .svg 可带 <script>，.htm 是 .html 的另一半，.m 是 Objective-C，.jl 是 Julia。
+             ".htm", ".svg", ".m", ".jl"}
 CONFIG_EXTS = {".json", ".yaml", ".yml", ".toml", ".ini", ".cfg", ".conf", ".env", ".properties"}
 DOC_EXTS = {".md", ".markdown", ".html", ".txt", ".rst"}
 MAX_BYTES = 2 * 1024 * 1024
@@ -662,6 +668,32 @@ def _self_test():
         shutil.rmtree(own, ignore_errors=True)
     if len(manifest_gaps("package.json", '{"name":"x"}')) < 2:
         helper_bad.append("package.json 缺 license/repository 没报出来")
+    # 池子覆盖面：门禁当受保护文件的那四类扩展名，扫描器必须真读它们的内容。
+    # 以前只门禁认、扫描器不读，密钥与动态执行写进 .svg/.htm/.m/.jl 就等于不存在。
+    # 触发词一律拆写：本文件既要自扫，也要被仓库扫描扫到，整串会把自己判进去（A472 第 1 条口径）。
+    px = tempfile.mkdtemp(prefix="forge-audit-pool-")
+    try:
+        xf = {os.path.join("assets", "icon.svg"): '<svg><script>fet' + 'ch("/api/market", {method:"POST"});</script></svg>\n',
+              "page.htm": "var h = ev" + "al(location.hash);\n",
+              os.path.join("src", "run.jl"): "run(`cur" + "l -s http://x`)\nconst val PASS = \"Sup3rS3" + "cretPass\"\n",
+              os.path.join("src", "App.m"): "#import <Foundation/Foundation.h>\n@implementation Demo\n@end\n"}
+        for rel, body in xf.items():
+            p = os.path.join(px, rel)
+            os.makedirs(os.path.dirname(p), exist_ok=True)
+            with open(p, "w", encoding="utf-8") as f:
+                f.write(body)
+        _s5, _f5, _k5, _u5, _a5 = scan(px, False, [])
+        if _s5 != len(xf):
+            helper_bad.append("四类扩展名应读进 %d 个文件，实得 %d（池子里缺哪一类？）"
+                              % (len(xf), _s5))
+        for cid, fname in (("SEC-4", "assets/icon.svg"), ("SEC-3", "page.htm"),
+                           ("SEC-2", "src" + "/" + "run.jl")):
+            if not any(x["file"] == fname for x in _f5[cid]):
+                helper_bad.append("%s 没在 %s 上报出来，那类文件在池子里读不到内容" % (cid, fname))
+    except OSError as e:
+        helper_bad.append("池子覆盖面用例没跑成：" + type(e).__name__)
+    finally:
+        shutil.rmtree(px, ignore_errors=True)
     # plugin.toml 必填要按节判定：子段里的同名键不能顶掉顶层缺项
     nested = "[plugin]\nid = \"a\"\nname = \"n\"\nversion = \"1.0.0\"\n\n[plugin_runtime]\nentry = 1\n"
     if not any("entry" in m for m, _l in manifest_gaps("plugin.toml", nested)):
