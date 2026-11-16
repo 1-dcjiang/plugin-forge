@@ -80,7 +80,7 @@ issue 里标「未核实」的一条也核了：`plan_sha256` **确实**被检�
 `Password=...` 这类非 URL 连接串。代价是 `SSH_AUTH_SOCK` 会被命中，所以写进 `KEEP_EXACT` 显式保留
 （它不是口令，删了 git over SSH 就找不到 agent）。`SESSIONNAME`、`OAUTH_SCOPE`、`AUTHOR_NAME` 这类
 按边界规则仍被保留。本机实测多删的是 `CLAUDE_CODE_SESSION_ID` / `WT_SESSION` 这一类会话号，
-N.E.K.O 服务与 git/uv/pip 都不读它们。自检名单扩到 61 项（本机实测 `--self-test` 报 61 项）。反向对照：撤掉名字扩充 → 4 条断言报错、退 1。
+N.E.K.O 服务与 git/uv/pip 都不读它们。自检名单随之扩充（项数以 `--self-test` 实跑输出为准，本文件不钉数字）。反向对照：撤掉名字扩充 → 4 条断言报错、退 1。
 
 边界规则不误伤 `LICENSES`、`LICENSING`、`OAUTH_SCOPE`、`AUTHOR_NAME`、`SESSIONNAME`；`LICENCE` 与
 `LICENSE` 两种拼写都按名字剔掉（实测 `OPEN_LICENSE_DIR` 也剔）。
@@ -184,6 +184,55 @@ A464 第 13 条留的「`pid` 复用判断仍无用例」这一项，本轮起�
   否则署分会随打包丢失。致谢项的合规要求比 `LICENSE` 更长。
 
 
+
+## 代码精简轮（2026-11-16，ponytail + simplify-codebase）
+
+范围。作者指定用 ponytail 与 simplify-codebase 精简代码。目标面是六个 Python 脚本共 3522 行，其中自检 667 行。
+摸底用一条工作流：7 个 finder 分头读，每条候选过两个对抗镜头（可达性反证、门禁保权），最后一名批评员复核覆盖面。
+68 个 agent 跑完，30 条原始发现，20 条双镜头通过，7 条有争议，3 条被驳回。
+基线（改动前实跑）：五个 `--self-test` 全绿，`roster --check` OK，真实扫描 95/100 放行。
+
+砍掉的东西，每条都有反证或探针：
+
+| # | 位置 | 砍掉的 | 依据与后果 |
+|---|---|---|---|
+| 1 | sandbox.py `cmd_serve` | Popen 之前那次 `save_state(pid=os.getpid())` | os.execve 时代的化石。那份状态里的 pid 指向包装进程而不是服务进程。Popen 抛异常时它还留在那里等 pid 复用。删掉以后无状态窗口只报「没有状态文件」，不可能再打到无关进程 |
+| 2 | sandbox.py `prepare` | `--repo-url` 与 `--ref` 两个旗标 | 全机器零调用者，SKILL.md 只教 `--repo` 挂载。要测 fork 或钉版本：自己 clone 再用 `--repo` 指过来，`sync` 读的是那个仓库自己的 origin。探针 P1/P2 确认两个旗标现在退 2 |
+| 3 | sandbox.py `cmd_status` | `b.get("items")` 与 `b.get("data")` 两个猜测键 | 上游三条路由的列表键就是 STATUS_ROUTES 的第二个字段。实测外形是 `{plugins,message}`、`{plugins,time}`、`{messages,count,time}`。猜键保护不了任何人：键真被改掉，行解析器同样要跟着改 |
+| 4 | check_contract_approval.py `compile_glob` | `?` 与 `[...]` 两类通配 | docstring 与 schema 从未承诺它们，零夹具零文档使用。更要紧的是 `[...]` 把 scope 文本原样塞进正则：`src/[b-a].py` 抛 PatternError，整轮判定跟着消失。这正是本文件第 26-27 行自己立的铁律要防的形状。现在两个字符走 re.escape 按字面匹配，失败方向是少覆盖、多拒。新增 5 条 glob 用例钉住，控制 C1/C2 变红 |
+| 5 | security_audit.py `score()` | 从没被读过的 `scanned` 形参 | 判定逐字节不变。`scan()` 仍返回 scanned，main 用得上 |
+| 6 | security_audit.py 自检 | 手写的第二份 id 到表 的映射 | 改成 `dict(TABLES)`。旧写法在新增一档时会静默漏测。控制 C3 故意写错一档，自检立刻变红，证明这条路径真被跑到 |
+| 7 | 四处 `getattr(args, "x", False)` | 对 argparse 保证存在的属性做防御 | 边界作秀：属性一定在。改成直接取名字，接线错了当场报 AttributeError，而不是静默按 False 走下去 |
+| 8 | sandbox.py `cmd_doctor` | `[c for c in checks[:1] if not c[1]]` | 假循环，外加对 checks[0] 的位置耦合。改成先算 `py_ok` 再判它 |
+| 9 | sandbox.py 自检夹具 | 函数内的 `import pathlib` | 模块层已经有 `from pathlib import Path`。`tempfile` 只有这一处用，保留它的局部导入 |
+| 10 | profile_drift.py | `--limit` 与它的截断 | 全机器零调用者，CI 只传 `--strict`。匿名限额那一小时 60 次由 24 小时缓存与 CI token 承担。探针 P3 确认退 2 |
+| 11 | roster.json | 14 行 `profession_zh` | 零读者。运行副本在 agents/*.md 的 frontmatter，那一份由 `--check` 逐字段核对。roster 里这一份没人比，正是第 115 行记过的 displayName 同款隐患 |
+| 12 | 文档里的数字钉死 | 16 处「完整 11 条」与 4 处「23 份笔记」 | 数字今天都对，但没有任何检查器覆盖它们，改一次宪法要手改 16 个文件。只留归属那一份：constitution.md 的标题与 neko-sources.md 的清单表。口径同 A571 第 7 条 |
+| 13 | 本文件第 83 行 | 钉死的「61 项」自检计数 | 本文件在 119、174、227 三处宣布不钉数字，这一行自己还钉着，而且已经过期 |
+
+补上去的说明与文档。这些是加行，不是砍行：STATUS_ROUTES 上方钉住三条路由的返回外形。CODE_EXTS 上方写明本仓库两份扩展名名单用途不同，别当成同一件事。
+`install --python` 的帮助文本改对：uv 走 `--py-version`，pip 走当前解释器，旧话只说了一个默认。
+workflows.md 补上 `--staged` 与 `--changed` 两种自动化用法，这两个旗标代码里早就有、文档从没写过。
+generate_roster_tables.py 的头两处少报了自己的写范围与模式清单。neko-plugin-sandbox/SKILL.md 流程图那行注释跟上「五种走向」。
+
+决定不砍的，以及理由：
+- serve 与 start 的启动序列合并。删掉第 1 条之后只剩两处三行的状态字典，差别只有 mode 与 pid 来源。抽 helper 要新造一个六值返回的接缝，行数打平，动的又正是写 pid 那一段。pid 写错就是杀错进程，而 Windows 的 CI 抓不到。工作流的批评员把这条列为最危险的一项。留。
+- `_utf8_stdout` 与 `_utf8` 四份、四套自检 harness、`load_config` 与 `save_state` 两份。单文件可运行是这些脚本的交付前提，README 与每个文件头都这么承诺。合并要引入共享模块，把每条安装路径变成两文件原子拷贝。留。
+- `env_is_secret`（sandbox）与 `KEY_WORDS`（security_audit）不合并。前者是运行时无损广删，后者是门禁按名字否决。共享词表会把审计豁免带进过滤器，或者把过滤器的宽度带进否决。两个方向都动检测力。留。
+- sandbox.py 两处 rmtree 守护的插件 id 字面量不提取成常量。AUDIT.md 对该行有「可 grep」的要求，提取后守护条件不再能一眼数清，而自检里还有同字面量的第三、第四份。留。
+- `BASELINE` 常量与两份文档副本。部署副本单独跑在 `~/.workbuddy/hooks/`，反向读不到 md。md 那份带同意日期与哈希，是控制链记录。留。
+- install 的 `--no-uv`。`--help` 就列着它，是公开选项，而且 pip 路径的可控回退只在它给出时才对 SSL 故障生效。留。
+- session_capability_refresh.py 的 `inp`（解析 stdin 却没人读）与 `build_context` 的 `truncated` 形参。两处都是真死代码，各一行能改完。这个文件是每次会话都要跑的 SessionStart hook，没有自检，CI 只做语法检查，部署副本另在 `~/.workbuddy/hooks/`，而它自己的 §6 降级契约文本受解冻窗口纪律管。本轮不动，等作者点名开那个窗口。
+
+盲区，照实说：
+- `cmd_serve`、`cmd_start`、`cmd_doctor`、`cmd_status` 四个命令体没有自检覆盖（要真起进程或读环境）。第 1、3、8 条改在这里，靠的是实跑探针与逐行读证，不是测试。
+- `_pid_really_alive` 是 stop 路径上唯一没有用例的探针。CI 跑 ubuntu，Windows 分支不跑它，自检注入的是别的函数。本轮没补：补它要先给它加注入接缝，那是加东西而不是精简。记在这里待办。
+- roster.json 的「零读者」只在本仓库与本机可证。团队外部工具若读 `profession_zh`，这次删除会打断它。本仓库 66 个文件、三面装机副本、pf-report 工具都搜过，无命中。
+- 装机三面的字节一致性本轮只测了改前那一次（三个脚本 byte-identical）。改完还要跑 `install_sync.py --dry-run` 再 `--apply`，否则宿主用的仍是旧字节。这一步未做。
+
+复跑（2026-11-16，本机）。六个文件 `py_compile` 全过。五个 `--self-test` 全绿，例数以实跑输出为准。
+`roster --check` OK。真实扫描仍 95/100 放行。本轮 3 组反向对照全部变红，4 个删除旗标探针全部符合预期。
+上轮 A571 的 12 组控制复跑仍全部变红，说明本轮没有削掉任何测试的咬合力。控制脚本在仓库外：`forge-scratch/run_controls2.py` 与 `run_controls.py`。
 
 ## 更正记录（2026-11-15）
 
