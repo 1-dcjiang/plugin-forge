@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""profile 锚点漂移探针（零第三方依赖，Python 3.8+；网络只走 gh 的只读 API）
+"""profile 锚点漂移探针（零第三方依赖，Python 3.8+；网络走 GitHub REST 只读接口，
+用 urllib 直连，不依赖 gh——CI 里没有交互式登录也能跑，见 api()）
 
 用途
   profile-neko.md 的锚点写法不统一：`(1050 行，读于 a222e50)`、`（id 212、name 213）`、
