@@ -1177,9 +1177,48 @@ def _self_test():
         else:
             os.environ["NEKO_PLUGIN_STARTUP_TIMEOUT"] = x_env0
         shutil.rmtree(x_root, ignore_errors=True)
+    # _wait_health 三例：就绪要立刻返回，服务提前退要把日志尾巴与退出码带出来。
+    # 本轮真机跑的是 serve 那条路，start 这条以前只有读证。取数函数在这里临时替换，
+    # 不改动 _wait_health 本身，跑完在 finally 里换回来。
+    hw_root = Path(tempfile.mkdtemp(prefix="sb-wait-"))
+    hw_log = hw_root / "server.log"
+    hw_log.write_text("\n".join("第%d行" % i for i in range(1, 41)), encoding="utf-8")
+    _real_get = globals()["http_get"]
+
+    class _Exited(object):
+        returncode = 1
+
+        def poll(self):
+            return 1
+
+    try:
+        globals()["http_get"] = lambda port, path, timeout=2: (200, '{"status": "ok"}')
+        if _wait_health(None, 1, hw_log, 5) != 200:
+            bad.append("服务就绪时 _wait_health 没返回 200")
+        globals()["http_get"] = lambda port, path, timeout=2: (503, "")
+        if _wait_health(None, 1, hw_log, 0) is not None:
+            bad.append("timeout=0 应一次都不探，直接返回 None")
+        hw_exit = None
+        import contextlib
+        import io
+        buf = io.StringIO()
+        with contextlib.redirect_stderr(buf):
+            try:
+                _wait_health(_Exited(), 1, hw_log, 30)
+            except SystemExit as e:
+                hw_exit = (e.code, buf.getvalue())
+        if hw_exit is None:
+            bad.append("服务提前退出时 _wait_health 没停手")
+        elif "第40行" not in hw_exit[1] or "code=1" not in hw_exit[1]:
+            bad.append("提前退出的诊断没带出日志尾巴与退出码：%r" % (hw_exit[1][-120:],))
+        elif hw_exit[0] == 0:
+            bad.append("提前退出要走 die，退出码不该是 0")
+    finally:
+        globals()["http_get"] = _real_get
+        shutil.rmtree(hw_root, ignore_errors=True)
     total = (len(keep) + len(drop) + 9 + len(stop_cases) + 4 + len(posix_cases) + 1
              + len(stat_cases) + len(alive_cases) + 4 + len(x_tomls) + len(x_flags)
-             + len(x_rows) + x_n) + _symlink_cases(bad)
+             + len(x_rows) + x_n + 5) + _symlink_cases(bad)
     print("SANDBOX SELF-TEST: %s（%d 项）" % ("PASS" if not bad else "FAIL", total))
     for m in bad:
         print("  FAIL:", m)
