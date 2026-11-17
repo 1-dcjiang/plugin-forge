@@ -1033,6 +1033,48 @@ coopanion-forge 那边 `pnpm install` 进工作区以后，`JSON artifacts parse
   另一条路是一次 git tree API 调用现算交集并缓存，代价是 `unresolvable()` 从纯文本函数
   变成要 head 的取数函数
 
+### 工单 W11：名册人数门禁的四处逃逸、--write 带病退 0、越界改字节面
+
+来源：外部核对报告 `forge-scratch/wf-out3/W11-名册门禁.md`（六子项，A1/A3/A5/BYTES 为
+still-open，A2 与 LEDGER 判为「结构上堵不尽 / 要拍板」）。补丁我在真仓逐块落地，
+验收与反向对照在 `forge-scratch/run_controls26.py` 自己重跑一遍才提交。
+
+已修：
+
+- **A1 后缀逃逸**：`COUNT_SCAN_SUFFIXES` 之外换 `.txt` 或干脆不带后缀，声明检查整段跳过。
+  实测同内容 `.txt` 退 0、改成 `.md` 退 1。现在补 `.txt .rst .yml .yaml .toml` 并扫无后缀文件。
+  不改成「凡文件都试解码」：脚本源码与自检用例里就有五种受管句式的样例句，全量扫会常红误报
+- **A3 豁免用 endswith 尾巴**：`docs/evil-profile-dsh.md` 整文件免掉，改一个字母才报。
+  换成精确相对路径 `skills/plugin-forge/references/profile-dsh.md`；四处装机面的真实路径
+  都是这一个相对名，精确比对不伤任何一处真豁免
+- **A5 `--write` 带病退 0**：stray 与空转进的是 `drift`，旧 `return 1 if args.check else 0`
+  让 `--write` 修不了也退 0，还打印「已修复，请复查 git diff」——与文件头注释直接矛盾。
+  现在抽成 `unfixable(drift)`，命中就退 1 并说明要人工处理；识别字样由自检钉住
+- **BYTES 越界改字节**：`read()` 文本模式折行尾、`utf-8-sig` 剥 BOM 不补；实测一次 `--write`
+  让 BOM 消失、1 行裸 LF 被并进 CRLF。现在 `read` 用 `newline=""`，`write` 检测 BOM 后按同编码写回，
+  `sync_tables` 按标记区现状渲染行尾。报告作者在这块自己翻车两次（只改 read 不够、
+  只改 read 不改 write 会二次翻译行尾），两块必须一起上——我按这个形状落的
+
+验收（`run_controls26.py` 实跑）：B1 .txt 与无后缀种句退 1；B2 冒名尾巴文件退 1、
+真豁免路径退 0；B3 stray 时 `--write` 退 1、不再出现「已修复」、stray 文件 sha 不变；
+B4 BOM 保留、CRLF 74→74、裸 LF 1→1、变化的两行只差数字（README 本来就有两处声明，
+所以判据写成「每一处变化都只动数字」，不是「只许变一行」）、再跑一次 sha 不变；
+B5 干净副本 `--check` 0 且 `--self-test` PASS。
+撤零件臂 S1-S5 各撤一块，五种退化全部复现（`.txt` 回到退 0、冒名文件回到退 0、
+stray 回到「已修复」退 0、行尾被归一化、BOM 消失）。
+自检新增 W11-A1 / A3 / A5 / 字节面四组判据。
+
+未修，等拍板：
+
+- **A2 措辞逃逸**：五种句式之外换个说法（「专家 9 名、合计 10 人」）就藏住了，`--check` 退 0。
+  这是正则白名单的固有边界，打完本轮补丁再种同一句仍退 0（实测）。建议 SOP：roster 变更时
+  在未列入 `COUNT_FILES` 的文件上跑一遍 `grep -rE "[0-9]+ +(名|位) +(专家|人设|编制)"`；
+  或者立一条规范句「编制人数只许用五种受管句式书写」。两条都要 云玩家 定
+- **LEDGER 历史账本**：新增带日期的账本文件会被报「名单外」，照提示补进 `COUNT_FILES` 以后
+  `--write` 会把历史数字改成现值（等于造假）；补进 `COUNT_EXEMPT` 才安全，但错误文案没提这条路。
+  要拍的是：给账本一类文件一个模式化豁免（例如 `docs/decision-log-*.md` 或首行标记），
+  还是改错误文案指明「历史账本请进 COUNT_EXEMPT」
+
 ### 仍未处理（写清楚，不算已解决）
 
 - `--include-docs` 没接进 CI：本仓文档里有大量示例文本会撞 SEC-1/3/4，逐条人工判过才能豁免。
