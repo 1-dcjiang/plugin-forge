@@ -430,6 +430,20 @@ DETACHED 那半个仍没覆盖：它只在 Windows 真起进程时才走得到�
 - DETACHED 分支的实测只到注入那一层。真起进程时父任务被 job object 回收的那一半仍未量过。
 - 沙箱根 `forge-sandbox-start` 与 `forge-sandbox-refuse` 留在本机，随时可整删。
 
+### 部署副本曾经悄悄落后 5 天
+
+`~/.workbuddy/hooks/session_capability_refresh.py` 的 mtime 是 2026-11-15 09:30，与仓库副本 md5 不同。
+也就是说这三天每个会话注入的那段能力底座文本，跑的不是仓库里这一份。`install_sync.py` 管不到这个路径，
+它是第三份副本，只有手动替换才会跟上。
+
+处置（2026-11-17 09:11）：先备份到 `session_capability_refresh.py.bak-20261117T091120`，再用仓库副本替换。
+替换后 md5 与仓库一致。部署件自检 49 项通过。再按 SessionStart 的真实形态喂一个带
+`source: "compact"` 的 payload 跑一次：退出码 0，stdout 一行合法 JSON，顶层只有 `hookSpecificOutput`，
+stderr 空，ctx 1281 字符，报「有变更（10 项）」。
+
+教训写在这里：说「三处装机面已同步」之前要先确认同步脚本覆盖的几个面。宿主 hook 那条路径不在覆盖面里，
+它同样是副本，同样会落后。
+
 ### 仍交回作者的一项
 
 `session_capability_refresh.py` 的两处死代码没动。改动本身各一行，但它牵连三件事：那个文件是每会话都跑的
