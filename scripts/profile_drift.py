@@ -305,12 +305,21 @@ def _anchor_symbol_span(seg):
     return out[:6]
 
 
-LOOSE_RE = re.compile(r"(?<![\w/.\-])([\w.\-/]+\.(?:py|md|toml|json|js|ts))"
-                      r"(?=[:：]\s*\d|\s+(?:第\s*)?\d{1,5}(?:\s*[-–]\s*\d{1,5})?\s*行)")
+# 文件名本体。行号在不在、是什么形状，统一交给 window_nums 判——与 collect() 同一张形状表。
+# 旧版这里自带 lookahead，只认「:NNN」与「NNN 行」两种紧挨着的形状；裸名用括号区间、顿号列、
+# id 标签列时 unresolvable 与 collect 都不看，双向隐身（W10.3）。
+LOOSE_RE = re.compile(r"(?<![\w/.\-])([\w.\-/]+\.(?:py|md|toml|json|js|ts))")
 LOCAL_NAMES = None
-# 这三种说法都表明那句话不在声明「上游第 N 行」。上游锚点照样由 collect() 抽，
-# 这里只是不再要求写全目录：未核验的句子本来就承认没核，本机路径与本机文档不是上游文件。
-SKIP_MARKS = ("未核验", "未核实", "本机")
+# 上游同名出现 2 份以上的文件名，与本仓文件名求交集（脚本 forge-scratch/wf-out/up_tree.py，
+# 抓于 2026-11-18：SKILL.md 36 份、README.md 28 份、plugin.toml 16 份）。这些名字即使撞
+# 本仓文件名也不豁免：裸名进不了 collect，行号写错 CI 不响（W10.2）。
+# 刷新义务：上游新增歧义名后重跑交集；未刷新前清单只是下限。
+AMBIG_UPSTREAM = frozenset({"SKILL.md", "README.md", "plugin.toml", "main.py", "conftest.py"})
+# 这些说法与标记只豁免含它的那一个小句（边界见 CLAUSE_SEPS），不再整行静音（W10.1）。
+# 「drift-ignore」是给讲解坏写法的例句用的显式标记：反例句不在声明上游行号，
+# 门禁不该逼作者删例句（W10.4）。上游锚点照样由 collect() 抽，这里只是不再要求写全目录。
+SKIP_MARKS = ("未核验", "未核实", "本机", "drift-ignore")
+CLAUSE_SEPS = ("。", "；", ";", "|", "！", "？", "，", ",")
 
 
 def _local_names():
@@ -333,20 +342,34 @@ def unresolvable(text):
     这种写法探针不可能猜对，以前 PATH_RE 匹配不到就整条跳过——上一轮 `config/network.py`
     的行号被我改成 194 就是这么溜过去的。这里不猜映射表（猜错会报「对得上」，比不检更糟），
     只把写法报出来，要人把目录写全。
-    以 / 或 ~ 开头的是本机路径，不是上游文件；写了「未核验」「本机」的行本来就不在声明
-    「上游第 N 行」，跳过。
+    2026-11-18 W10 四条一起改：①豁免按小句生效，不按整行——一行表格里「本机」不再静音
+    同行另一句的上游裸名锚点；②AMBIG_UPSTREAM 里的名字即使撞本仓文件名也照报，指认本仓
+    文件请写仓内相对路径，路径存在即豁免；③有没有行号统一问 window_nums，与 collect()
+    共用一张形状表；④讲解坏写法的例句在句内写 drift-ignore。
     """
     out = []
     for no, line in enumerate(text.split(NL), 1):
-        if any(k in line for k in SKIP_MARKS):
-            continue
         # 反引号先抹平：行内代码写法 `cli.py` 105-113 行 里，那个反引号正好挡在
         # 文件名与数字之间，不抹就看不见这一处锚点。路径串本身不含反引号，抹掉不改变取值。
         plain = line.replace("`", " ")
         full = set(m.group(1) for m in PATH_RE.finditer(plain))
         for m in LOOSE_RE.finditer(plain):
             p = m.group(1)
-            if p in full or p.startswith(("/", "~")) or p.rsplit("/", 1)[-1] in _local_names():
+            base = p.rsplit("/", 1)[-1]
+            # 白名单全路径、仓内相对路径（必须带目录）、以 / ~ . 开头的本机路径都不归这里管。
+            if (p in full or p.startswith(("/", "~", "."))
+                    or ("/" in p and os.path.isfile(os.path.join(REPO, *p.split("/"))))
+                    or (base in _local_names() and base not in AMBIG_UPSTREAM)):
+                continue
+            # 形状对齐：文件名之后、下一个文件名之前，凡 window_nums 认的行号都算锚点，
+            # 与 collect() 判全路径时用的是同一个函数、同一张形状表。
+            nxt = LOOSE_RE.search(plain, m.end())
+            if not window_nums(plain[m.end():nxt.start()] if nxt else plain[m.end():]):
+                continue
+            # 小句级豁免：标记词只管含它那一句，不再静音同行其他句。
+            cut = max([plain.rfind(s, 0, m.start()) for s in CLAUSE_SEPS] + [-1])
+            nxtb = [i for i in (plain.find(s, m.end()) for s in CLAUSE_SEPS) if i >= 0]
+            if any(k in plain[cut + 1:min(nxtb + [len(plain)])] for k in SKIP_MARKS):
                 continue
             out.append({"line": no, "path": p, "text": line.strip()[:120]})
     return out
@@ -761,10 +784,28 @@ def self_test():
             cases.append((un("本机 `~/.workbuddy/settings.json:12`"), []))
             cases.append((un("见 `plugin/core/registry.py:1` 与 `registry.py:2`"), ["registry.py"]))
             cases.append((un("见 `plugin/a.py` 的 `handler`"), []))
+            # W10 四条例据：撤对应判据行，这几条必须红。
+            # ①小句级豁免：同行另一句的「本机」不静音上游裸名锚点
+            cases.append((un("| 6 | 起 | 本机旧拷贝；上游 `registry.py` 第 42 行 |"),
+                          ["registry.py"]))
+            # ②上游歧义名撞本仓文件名仍须报；写全仓内相对路径才豁免
+            cases.append((un("见 `SKILL.md` 第 9999 行"), ["SKILL.md"]))
+            cases.append((un("见 `skills/neko-plugin-sandbox/SKILL.md` 第 9999 行"), []))
+            # ③形状对齐：collect 认的括号区间、冒号、顿号列、行号列，裸名同样要报
+            cases.append((un("见 `messages.py`:22"), ["messages.py"]))
+            cases.append((un("见 `messages.py`（22）"), ["messages.py"]))
+            cases.append((un("见 `schema.py`: PluginRuntimeSchema（264-282 读于 db81c1be0）"),
+                          ["schema.py"]))
+            cases.append((un("见 `runs.py` 行号 64、95"), ["runs.py"]))
+            # ④讲解坏写法的例句显式豁免
+            cases.append((un("`messages.py:22` 这种写法探针猜不对（drift-ignore）"), []))
+            # 本机绝对/相对路径照旧豁免；裸 main.py 属上游歧义名，须报
+            cases.append((un("见 `./tools/mine.py:3` 与本仓 `main.py`:8"), ["main.py"]))
             # 「NNN-NNN 行」紧跟着文件名时也是锚点，反引号要抹平才看得见
             cases.append((un("`cli.py` 105-113 行"), ["cli.py"]))
             cases.append((un("`plugin/neko_plugin_cli/cli.py` 105-113 行"), []))
-            cases.append((un("`cli.py` 实测为 105-113 行"), []))
+            # W10.3 对齐后本句是锚点：全径同句 collect 本来就抓 [105, 113]，裸名不许缺一边。
+            cases.append((un("`cli.py` 实测为 105-113 行"), ["cli.py"]))
             cases.append((un("本机蒸馏文档 `sdk-core.md` 第 20 行"), []))
             # 行号与符号的配对：一条锚点里多个符号时，每个号各问各的
             seg_two = ": timer_interval（def 156）、lifecycle（127）"
