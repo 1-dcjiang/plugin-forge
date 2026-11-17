@@ -120,6 +120,27 @@ def test_交付证据规范句必须逐字在名单文件里(fake_repo, roster, 
     assert any("出现 2 次" in x for x in roster.check_report_formula())
 
 
+def test_闸门快照接线必须在位(repo_root):
+    """工单 W15：SKILL §6 是强制口径，人设与验收清单必须各有一处接线文字。
+
+    这条是机器杆。上一轮实测 `grep -c 闸门快照` 在 14 个人设与 workflows.md 全是 0：
+    §6 写了强制，接线却是断的，lead 可以交付而不触发它。
+    """
+    import io as _io
+    import os
+    pairs = [
+        ("agents/plugin-forge-lead.md", "闸门快照"),
+        ("skills/plugin-forge/references/workflows.md", "闸门快照"),
+    ]
+    for rel, needle in pairs:
+        text = _io.open(os.path.join(repo_root, rel), encoding="utf-8").read()
+        assert needle in text, "%s 里 §6 闸门快照的接线文字不见了（工单 W15）" % rel
+    # 边界不许被这次接线冲掉
+    skill = _io.open(os.path.join(repo_root, "skills/plugin-forge/SKILL.md"),
+                     encoding="utf-8").read()
+    assert "可选参考" in skill, "SKILL 里「delivery-self-check 是可选参考」那句必须还在"
+
+
 def test_仓内真实文件当前必须全绿(roster, repo_root):
     """这条不用临时仓库：直接核真仓现状，防止「测试夹具绿了、仓库本身烂着」。"""
     assert roster.sync_tables(roster.load_roster(), False, []) == []

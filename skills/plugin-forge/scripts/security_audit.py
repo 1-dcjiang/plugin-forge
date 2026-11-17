@@ -450,6 +450,14 @@ def iter_files(root, include_docs, allow, skips=None, unclear=None):
                 continue
             # 清单文件无条件进池：requirements.txt 属 DOC_EXTS，不加 --include-docs 就读不到，
             # 而 git+ 直连依赖最常写在这个文件里。
+            # 工单 W18.1：docs/ 下的 .html 与同目录 .md 同口径——默认不参与评分，
+            # --include-docs 才读。理由：宿主真加载的面板页不当素材放过（security_audit.py
+            # 文件头的设计注释仍然成立），但文档导出页长得像代码不等于它就是运行面。
+            # 真凭据仍会被拦：CI 的文档面门禁那一步带 --include-docs，SEC-2 一票否决照判。
+            if (not include_docs and scan_ext in (".html", ".htm")
+                    and "/docs/" in ("/" + rel.lower())):
+                skips.append(rel + "（docs 下的 " + scan_ext + " 按文档形态排除，不在扫描池）")
+                continue
             if (scan_ext and scan_ext not in pool and fn not in MANIFEST_NAMES
                     and not low.startswith(".env") and not low.endswith(".env")):
                 if scan_ext in ASSET_EXTS or scan_ext in DOC_EXTS:
@@ -914,7 +922,7 @@ def _self_test():
             return r.returncode, json.loads(r.stdout)
         except ValueError:
             return r.returncode, {}
-    for mk in ("empty", "secret", "blind", "pool"):
+    for mk in ("empty", "secret", "blind", "pool", "html-doc"):
         d = tempfile.mkdtemp(prefix="forge-audit-exit-" + mk + "-")
         try:
             if mk == "secret":
@@ -925,6 +933,36 @@ def _self_test():
                 if rc != 2 or not hits:
                     helper_bad.append("夹具里放一条 GitHub token 形状：应 SEC-2 阻断退 2，实得 rc=%s 命中 %d"
                                       % (rc, len(hits)))
+            elif mk == "html-doc":
+                # 工单 W18.1：同一段纯文档教程，改后缀不许改变结论。
+                # .md 与 docs/*.html 在默认口径都不参与评分；带 --include-docs 都要读，
+                # 真凭据在两种后缀下一票否决。
+                L = chr(10)
+                text = ("# 教程" + L + L + "示例密钥 " + "AKIA" + "IOSFODNN7EXAMPLE"
+                        + " 与讲解代码 ev" + "al(x) 的写法。" + L)
+                os.makedirs(os.path.join(d, "docs"), exist_ok=True)
+                open(os.path.join(d, "app.py"), "w", encoding="utf-8", newline=L).write(
+                    "print(1)" + L)
+                open(os.path.join(d, "docs", "tutor.md"), "w", encoding="utf-8",
+                        newline=L).write(text)
+                open(os.path.join(d, "docs", "tutor.html"), "w", encoding="utf-8",
+                        newline=L).write(text.replace("# 教程", "<h1>教程</h1>"))
+                rc_m, body_m = _run([], d)
+                rc_f, body_f = _run(["--include-docs"], d)
+                if rc_m != 0:
+                    helper_bad.append("docs 下的 .html 在默认口径仍被评分：rc=%s counts=%s"
+                                      % (rc_m, body_m.get("counts")))
+                if body_f.get("counts", {}).get("SEC-2") != 2:
+                    helper_bad.append("--include-docs 下两种后缀的示例密钥数应一致（2 处），实得 %s"
+                                      % (body_f.get("counts"),))
+                # 非 docs 目录的面板页仍要当代码：设计注释那句不许被这次豁免冲掉
+                open(os.path.join(d, "ui"), "w") if False else os.makedirs(
+                    os.path.join(d, "ui"), exist_ok=True)
+                open(os.path.join(d, "ui", "panel.html"), "w", encoding="utf-8",
+                        newline=L).write(text.replace("# 教程", "<h1>面板</h1>"))
+                rc_u, body_u = _run([], d)
+                if rc_u == 0:
+                    helper_bad.append("ui/panel.html（宿主真加载的页）被 docs 豁免顺带放走了")
             elif mk == "blind":
                 with open(os.path.join(d, "ok.py"), "w", encoding="utf-8") as f:
                     f.write("print(1)" + chr(10))
