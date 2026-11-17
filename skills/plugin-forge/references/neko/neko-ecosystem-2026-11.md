@@ -29,7 +29,7 @@ N.E.K.O 插件侧在 2026-10~11 **没有破坏性变更**（此判断只到调�
 
 | 事实 | 证据 |
 |---|---|
-| 进程隔离 + async IPC | `plugin/core/host.py:11` `import multiprocessing`；`:52` `from plugin.core.zmq_transport import …`；`:131-135` 明确「Never touch ZMQ」的 fd 管理约束 |
+| 进程隔离 + async IPC | `plugin/core/host.py:11` `import multiprocessing`；`:52` `from plugin.core.zmq_transport import …`；`:138-143` 明确「Never touch ZMQ」的 fd 管理约束（那句现在在 141） |
 | 每入口超时可配 | **字段名是 `entry_timeout`**（`plugin/config/schema.py:107`），不是 `timeout`；校验要求 finite > 0 |
 | **Extension 类型已不存在** | `plugin/sdk/` 内无 `ExtensionKind` / `class Extension` 定义；包类型只有 Plugin 与 Adapter |
 | 每插件独立进程 | 官方插件文档：Plugin Host（生命周期/Bus/ZMQ IPC）+ Plugin Server（FastAPI/注册表/消息队列），Plugin / Adapter 各自独立进程 |
