@@ -65,6 +65,7 @@ skills/neko-plugin-sandbox/ NEKO 运行时沙箱 skill + scripts/sandbox.py
 codex/prompts/     Codex 单代理运行入口
 scripts/           generate_roster_tables.py（名册表生成）+ session_capability_refresh.py（能力刷新，只读）
                    + profile_drift.py（profile 锚点漂移核对，读上游当前 main；仓库维护面，不装进宿主）
+                   + verify_installs.py（仓外执行副本与仓库字节一致性，本地 --check、CI 只跑 --self-test）
 roster.json        团队名册唯一来源
 .github/           sync-check CI：名册漂移、门禁自检
 AUDIT.md NOTICE LICENSE

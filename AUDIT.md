@@ -899,6 +899,23 @@ session_id / source / hook_event_name」。删掉解析就同时改了一条对�
   FG-3（enclosing 顶格锚定对 TS 缩进方法不设边界）属 Python 面向的判据，
   TypeScript 侧要不要移植 = 49 号 W13，留给 云玩家
 
+### 工单 W09：部署副本一致性现在有机器检查了
+
+- 新脚本 `scripts/verify_installs.py`：字典 `PAIRS` 列「仓库文件 → 仓外真执行副本」，
+  逐字节比 sha256，任一处不同或缺失就退 1 并打印两侧 sha 与路径
+- 覆盖面只包含 `install_sync.py` 够不着的那一类：挂载态 SessionStart hook 与
+  marketplace 安装态副本（共 2 处）。skill 树、agents、prompts 三面仍由 install_sync 按目录展开，
+  本脚本不重复它的清单——重复两份清单就是两处各说各话
+- 本机实跑 `--check`：2 处一致、0 处问题、退 0（今晚 21:48 那次再部署之后才一致；
+  在那之前挂载态停在 `ad195c115825`，仓库已是 `3769e2347aa0`，正是 W09 说的复发漂移）
+- CI 只跑 `--self-test`（runner 上没有这两个面），`py_compile` 清单同步加上这一份
+- 自检 7 项 + 反证 24 六臂（`forge-scratch/run_controls24.py`）：
+  臂1 造出「仓库改了、副本没 cp」的真实局面（源多一字节、副本用本机真副本）→ 报 2 处且两侧 sha 不同；
+  臂2 撤「副本缺失也算红」→ 红；臂3 撤「源文件缺失也算红」→ 红；臂4 把字节比较短路成永真 → 三条判据一起红；
+  臂5 对照组绿；臂5b 核 CI 里确有 `--self-test` 与 `py_compile` 两处接线
+- 已知上限（写在文件头的 shortcut 里）：`PAIRS` 是硬清单，漏加一个新部署面就漏检一次。
+  出现第三类需要按目录展开的副本时，改成读 install_sync 的清单
+
 ### 仍未处理（写清楚，不算已解决）
 
 - `--include-docs` 没接进 CI：本仓文档里有大量示例文本会撞 SEC-1/3/4，逐条人工判过才能豁免。

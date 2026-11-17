@@ -24,6 +24,7 @@ jobs:
           python -m py_compile skills/neko-plugin-sandbox/scripts/sandbox.py
           python -m py_compile scripts/session_capability_refresh.py
           python -m py_compile scripts/profile_drift.py
+          python -m py_compile scripts/verify_installs.py
       - name: Roster generator self-test
         run: python scripts/generate_roster_tables.py --self-test
       - name: Roster tables and head-counts in sync
@@ -40,6 +41,10 @@ jobs:
         run: python skills/neko-plugin-sandbox/scripts/dry_load.py --demo-check
       - name: Drift probe self-test
         run: python scripts/profile_drift.py --self-test
+      - name: 部署副本一致性自检（阻塞：只跑离线夹具）
+        # runner 上没有本机的挂载 hook 与 marketplace 安装态，所以这里只跑 --self-test。
+        # 真比一比在本地跑：python -I scripts/verify_installs.py --check（工单 W09）。
+        run: python scripts/verify_installs.py --self-test
       - name: SessionStart 能力刷新自检
         run: python scripts/session_capability_refresh.py --self-test
       - name: 开发依赖与回归集（pytest 是唯一第三方包，产品脚本仍然零依赖）
