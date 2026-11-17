@@ -448,20 +448,36 @@ def remove_link(target):
         os.rmdir(str(target))      # junction 与目录软链：unlink 抛，rmdir 才摘得掉
 
 
-def resolve_plugin_entry(plugins_dir, pid):
+def resolve_plugin_entry(plugins_dir, pid, _isdir=None, _samefile=None):
     """返回 (真实条目名, 冲突说明)。
 
     大小写不敏感的文件系统上，`DEMO_PLUGIN` 与 `demo_plugin` 是同一个目录，
-    但插件 id 在清单里是两个不同的插件。这里按实际目录名解析，并把冲突报出去。
+    而插件 id 在清单里是两个插件：那时必须报冲突，否则装进去会先 rmtree 掉别人的内容。
+    大小写敏感的文件系统（Linux，CI 用的那台）上它们是两个合法目录，报冲突就是误杀
+    ——2026-11-17 run 44115796508 实测红在这里。所以命中「只差大小写」以后还要再问两句：
+    请求的那个名字在这台机器上真的存在吗，两个写法指向的是同一个目录吗。
+    _isdir / _samefile 是注入接缝：本机与 CI 各只覆盖一条腿，另一条靠夹具走。
     """
     try:
         listed = os.listdir(plugins_dir)
     except OSError:
         return pid, None
+    isdir = _isdir or os.path.isdir
+    samefile = _samefile or os.path.samefile
     for name in listed:
         if name != pid and name.lower() == pid.lower():
-            return name, ("目录里已有「%s」，与请求的「%s」只差大小写；"
-                          "这台机器的文件系统把它们当同一个目录" % (name, pid))
+            have = os.path.join(plugins_dir, name)
+            want = os.path.join(plugins_dir, pid)
+            if not isdir(want):
+                continue
+            try:
+                folded = samefile(have, want)
+            except OSError:
+                # 探测不动就按折叠算：宁可拒装，也不许把别人的工作内容删掉
+                folded = True
+            if folded:
+                return name, ("目录里已有「%s」，与请求的「%s」只差大小写；"
+                              "这台机器的文件系统把它们当同一个目录" % (name, pid))
     return pid, None
 
 
@@ -1113,6 +1129,24 @@ def _casefold_cases(bad):
                 bad.append("折叠文件系统上没认出大小写冲突：%r / %r" % (name, clash))
         elif clash:
             bad.append("大小写敏感的文件系统上却报了冲突：%r" % (clash,))
+        # 另一条腿用注入的探针走：CI 在 Linux 上、本机在 Windows 上，
+        # 真机各自只能覆盖一半，剩下的靠这三条夹具补齐
+        n += 1
+        nf = resolve_plugin_entry(str(plugins), "DEMO_PLUGIN", _isdir=lambda p: False)
+        if nf != ("DEMO_PLUGIN", None):
+            bad.append("模拟大小写敏感文件系统时报了冲突：%r" % (nf,))
+        n += 1
+        df = resolve_plugin_entry(str(plugins), "DEMO_PLUGIN", _isdir=lambda p: True,
+                                  _samefile=lambda a, b: False)
+        if df != ("DEMO_PLUGIN", None):
+            bad.append("两种写法指向不同目录时报了冲突：%r" % (df,))
+        n += 1
+        def _boom(a, b):
+            raise OSError(2, "samefile 探测不动")
+        ef = resolve_plugin_entry(str(plugins), "DEMO_PLUGIN", _isdir=lambda p: True,
+                                  _samefile=_boom)
+        if ef[1] is None:
+            bad.append("samefile 探测不动时不该放行（宁可拒装也不许删别人的内容）：%r" % (ef,))
         # 真装上 A，再用另一种大小写装 B：必须拒绝，且 A 的内容不能少
         src_a = td / "src_a"
         src_a.mkdir()

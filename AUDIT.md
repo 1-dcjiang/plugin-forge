@@ -928,6 +928,21 @@ coopanion-forge 那边 `pnpm install` 进工作区以后，`JSON artifacts parse
 - 验收用 yml 里那一行原样命令，在 `forge-scratch/jsontest` 夹具上跑：
   本仓产物放坏 JSON 退 1；只留 `node_modules/tslib/package.json`（带注释）退 0
 
+### 工单 W01 收尾：大小写冲突判据要看文件系统的真实行为（CI 在 Linux 上红过一次）
+
+- 上一个版本把「只差大小写」直接判成冲突。Windows 上对：两种写法是同一个目录，
+  rmtree 会抹掉另一个插件。Linux（CI 的 ubuntu-latest）上不折叠，那是两个合法目录，
+  于是 plugin-add / plugin-rm 被误杀。CI run `44115796508` 实测：
+  `FAIL: 大小写敏感的文件系统上却报了冲突`
+- 修法：命中「只差大小写」以后再问两句——请求的名字在这台机器上真的存在吗（`isdir`），
+  两个写法指向同一个目录吗（`samefile`）。任一为否就不是冲突
+- 探测不动时按冲突算：宁可拒装，也不许把别人的工作内容 rmtree 掉。这条方向是安全优先，
+  不是「保守放行」
+- 自检加三条注入夹具（`_isdir` / `_samefile` 两个接缝），本机与 CI 各覆盖折叠与不折叠一条腿。
+  沙箱自检 202 → 205 项
+- 反证 25（`forge-scratch/run_controls25.py`）三臂：撤 `isdir` 守卫、撤 `samefile` 判别、
+  探测失败改放行 —— 各退 1 且红在对应那条；对照组绿
+
 ### 仍未处理（写清楚，不算已解决）
 
 - `--include-docs` 没接进 CI：本仓文档里有大量示例文本会撞 SEC-1/3/4，逐条人工判过才能豁免。
