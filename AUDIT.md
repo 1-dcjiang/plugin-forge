@@ -836,6 +836,27 @@ session_id / source / hook_event_name」。删掉解析就同时改了一条对�
   臂4 未改动 rc=0
 - 能力刷新自检 66 → 72 项，全绿
 
+### 工单 W05：名单外扩展名里藏真凭据，扫描器与盲区账两边全瞎
+
+- 实测形状（外部审 13-gate-pool §3，本轮在 `forge-scratch/w05-atk/` 重放）：
+  `API_KEY = "ghp_…"` 写进 `settings.py.bak` 或 `report.wsf` → SEC-2=0、总分 100、`--fail-unclear` 也不响
+- 两个原因分开修：
+  ① 池子按字面扩展名判，`.bak` / `.wsf` 不在名单 → 文件整个不读。
+     现在判池前先剥一层备份后缀（`BACKUP_EXTS`，只剥一层），并把 Windows 脚本宿主
+     `.wsf .wsh .vbe`、服务端网页脚本 `.asp .aspx .jsp .jspx .cfm`、构建与配置载体
+     `.xml .csproj` 补进代码池；`.csv .tsv .lock .sum .log .diff .patch` 补进配置池
+  ② 「扩展名不在池」记成设计内排除 → 真盲区恒 0。现在只有 `ASSET_EXTS`（图片、字体、
+     压缩包、二进制）与文档仍算设计内排除，**未分类扩展名改记真盲区**
+- 口径转向：白名单永远可以漏下一个后缀。漏一个后缀的代价从「凭据被藏住」变成「CI 红一次」
+- 反证 20 四臂（`forge-scratch/run_controls20.py`）：撤后缀剥离 / 撤 .wsf 家族 /
+  未分类记回设计内 / 素材记成盲区，各退 1 且红在对应那条；对照组绿
+- 本仓实测：`scanned 26 / skipped 58 / by_design 58 / unclear 0`，裸跑（无 `--allow`）
+  `--fail-unclear --strict-placeholder --strict-declared` 仍 100/100 退 0
+  （`references/neko/system.llm` 以前落「不在池」，现归 DOC_EXTS）
+- 扫描器自检 126 → 130 例
+- 未做：`--include-docs` 接 CI 仍在待办（文档里示例文本多，需逐条判）；
+  攻击侧只补了证据里点名的家族，其余同类后缀按 13 §6 属 [未核实]，靠新的盲区账兜住
+
 ### 仍未处理（写清楚，不算已解决）
 
 - `--include-docs` 没接进 CI：本仓文档里有大量示例文本会撞 SEC-1/3/4，逐条人工判过才能豁免。
