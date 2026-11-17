@@ -67,6 +67,7 @@ IDENT_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]{3,}")
 # 第一版探针就在这里报了 8 条假漂移。第六种必须有「行号」两字打头，同一句话里光秃秃的数字不吃。
 NUM_PATTERNS = (re.compile(r"(?<![\w.\-])(\d{1,5})(?=\s*行)"),
                 re.compile(r"(?<![\w.])(\d{1,5})\s*[-–]\s*(\d{1,5})(?=\s*行)"),
+                re.compile(r":(\d{1,5})\s*[-–]\s*(\d{1,5})(?![\d%])"),
                 re.compile(r":(\d{1,5})(?![\d%])"),
                 re.compile(r"[（(]\s*(\d{1,5}(?:\s*[/、,]\s*\d{1,5})*)"),
                 re.compile(r"(?<=[A-Za-z_] )(\d{1,5})(?=[、，,)）])"),
@@ -609,6 +610,12 @@ def self_test():
         (_all_blank(["a", "b", "c"], [2, 3]), False),
         # 2026-11-17 补：区间形状的行号以前抽不出来。「实测为 105-113 行」整条锚点在门禁之外。
         (window_nums("实测为 105-113 行"), [105, 113]),
+        # 冒号区间（外部审 40 号 FG-5）：Cortico/TS 那一侧正文就写 `:14-36`、`:500-503`，
+        # 旧形状表只认头不认尾，区间尾号写错永远是绿。头尾两个号都要进号组。
+        (window_nums("src/core/blobs.ts:14-36、:85"), [14, 36, 85]),
+        (window_nums("src/core/core.ts:500-503 里重写 ts"), [500, 503]),
+        (window_nums("docs/worlds.md:60-61"), [60, 61]),
+        (window_nums("src/bot.ts:253-256 与 :1050"), [253, 256, 1050]),
         (window_nums("旧行号 1055-1150、1693-2049 已失效"), []),
         (window_nums("行号 64、95、182，读于 e14f61963"), [64, 95, 182]),
         (window_nums("`kind: EntryKind` 那一行，行号 263、302、391"), [263, 302, 391]),
@@ -816,6 +823,22 @@ def self_test():
                                 get=lambda u: ({"content": doc_b64}, None),
                                 cache_dir=tempfile.mkdtemp(prefix="drift-doc-"))[0]["status"],
                          "ok"))
+            # 区间尾号也要核（外部审 40 号 FG-5）：`:2-5` 的 5 落在文件外，必须报漂移。
+            # 旧形状表只认头，整条锚点写错尾号永远是绿。
+            rng_src = "def alpha():" + NL + "    pass" + NL
+            rng_b64 = base64.b64encode(rng_src.encode("utf-8")).decode("ascii")
+            rng_an = [x for x in collect("见 `plugin/a.py`: alpha:2-5 `")
+                      if x["path"] == "plugin/a.py"][0]
+            cases.append((rng_an["nums"], [2, 5]))
+            cases.append((check([dict(rng_an)], "ee66ee66ee66",
+                                get=lambda u: ({"content": rng_b64}, None),
+                                cache_dir=tempfile.mkdtemp(prefix="drift-rng-"))[0]["status"],
+                         "drift"))
+            # 同号组的两条锚点都要留在账上（外部审 40 号 FG-4）：去重键不含符号时，
+            # 第二条（往往是编出来的那个符号）静默消失，锚点总数不变、门禁全绿。
+            dup_text = ("见 `plugin/a.py`: alpha（1）`" + NL
+                        + "见 `plugin/a.py`: ghost（1）`")
+            cases.append((len([x for x in collect(dup_text) if x["path"] == "plugin/a.py"]), 2))
             # resolve_head 的三条分支：命中缓存、过期重取、取不到 sha。以前这段只能靠真网络演，
             # 「当前 main」这句话到底从哪来，门禁里没有一个用例说过（终检 sweep 第 14 条）。
             hc = tempfile.mkdtemp(prefix="drift-head-")
