@@ -42,6 +42,10 @@ jobs:
         run: python scripts/profile_drift.py --self-test
       - name: SessionStart 能力刷新自检
         run: python scripts/session_capability_refresh.py --self-test
+      - name: 开发依赖与回归集（pytest 是唯一第三方包，产品脚本仍然零依赖）
+        run: |
+          python -m pip install --disable-pip-version-check -q -r requirements-dev.txt  # forge-declared: SEC-4 理由=开发依赖安装，不在产品运行路径 出处=AUDIT.md#sec-declared 复审=2026-12-15
+          python -m pytest
       - name: 对本仓库跑一次真实安全扫描（裸扫，不加 --allow）
         run: python skills/plugin-forge/scripts/security_audit.py .
       - name: '审计三个旗标转为阻塞（盲区 / 占位符严格档 / 畸形点位声明；作者 2026-11-17 定：warnings 当 errors）'

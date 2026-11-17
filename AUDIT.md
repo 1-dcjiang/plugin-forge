@@ -749,6 +749,18 @@ session_id / source / hook_event_name」。删掉解析就同时改了一条对�
 - §6 原来那句「就三条 / 上面三条」改成不数条数——数过一次就要改三处，那几个数字已经错过
 - 反向对照 `~/forge-scratch/run_controls14.py`：3 组加对照组全部符合预期
 
+第 5 条 回归集 `tests/`（新增 37 例 pytest）
+- 三个测试文件：`test_roster_docs_gate.py`（表格与人数声明边界、交付口径、main 接线）、
+  `test_contract_gate.py`（scope/glob/过期/根外/宿主执行面/verify_commands/plan_sha256）、
+  `test_dry_load.py`（九种坏形状 + 内置件的包写法 + 真装载那条腿）
+- 唯一的第三方依赖是 pytest，且只用于开发：`requirements-dev.txt` + `pytest.ini`；
+  产品脚本仍然零第三方依赖，README 的安装节写明这点
+- 接线用例是新加的一类：以前所有测试都直接调函数，「函数还在、没人调用」这种断线它们全绿。
+  现在有一条 subprocess 跑副本仓库 `--check`，专门盯「口径核对有没有被接进 main」
+- 反向对照 `~/forge-scratch/run_controls16.py`：把九个历史 bug 一个个塞回代码，
+  九组全部被 pytest 拦下（第一版漏了一组——`errors += check_report_formula()` 被短路时测试全绿，
+  于是补了上面那条接线用例才拦住）
+
 ### 仍未处理（写清楚，不算已解决）
 
 - `--include-docs` 没接进 CI：本仓文档里有大量示例文本会撞 SEC-1/3/4，逐条人工判过才能豁免。

@@ -41,6 +41,16 @@ N.E.K.O 是 Apache-2.0 项目。本仓库只引用它的路由、契约、端口
 
 ## 安装
 
+**跑本仓的回归集（可选，只在你要改脚本时需要）**
+
+pytest 是唯一第三方依赖，且只用于开发：产品脚本 `scripts/*.py`、`skills/*/scripts/*.py`
+仍然零第三方依赖。
+
+```bash
+python -m pip install -r requirements-dev.txt
+python -m pytest            # 收集 tests/，覆盖 roster 门禁、契约门禁、干装载三条线
+```
+
 - **Claude Code / marketplace 宿主**：本仓库即插件，marketplace 单条目指向 `./`。
 - **Codex**：复制 `skills/plugin-forge/` 到 `~/.codex/skills/plugin-forge/`；`codex/prompts/plugin-forge.md` 到 `~/.codex/prompts/`（触发 `/plugin-forge`）。沙箱 skill 同样复制到 skills 目录。
 - **zcode**：`agents/*.md` → `~/.zcode/agents/`，`skills/plugin-forge/` → `~/.zcode/skills/plugin-forge/`。
