@@ -45,7 +45,7 @@ GIT_HTTP_OPTS = (["-c", "http.sslBackend=schannel",
 # 刻意不等于上游默认端口（config/network.py:193 USER_PLUGIN_SERVER_PORT=48916）：
 # 沙箱要和用户正在跑的 N.E.K.O 并存，撞默认端口只会白等 /health。
 DEFAULT_PORT = 43117
-# 上游 plugin/settings.py:790 对 NEKO_PLUGIN_STARTUP_TIMEOUT > 300 直接 raise ValueError，
+# 上游 plugin/settings.py:768-769 对 NEKO_PLUGIN_STARTUP_TIMEOUT > 300 直接 raise ValueError，
 # 服务会在 import 阶段就崩，报错离「超时配置写大了」很远。这里按上游上限夹紧。
 UPSTREAM_STARTUP_TIMEOUT_MAX = 300.0
 STATE_FILE = "sandbox.json"
@@ -532,7 +532,7 @@ def _server_env(root, args):
     env.setdefault("PYTHONUTF8", "1")
     env.setdefault("PYTHONIOENCODING", "utf-8")
     # 上游默认 10s 对冷 venv 太短，首次 import 重依赖会超时判 failed。
-    # 但上游 plugin/settings.py:788-791 对 >300 直接 raise ValueError，服务会在 import 阶段就崩，
+    # 但上游 plugin/settings.py:766-769 对 >300 直接 raise ValueError，服务会在 import 阶段就崩，
     # 报错和「超时配大了」毫无关系。这里对最终生效值夹紧（含外部环境带进来的值）。
     want = args.plugin_startup_timeout
     try:
@@ -545,7 +545,7 @@ def _server_env(root, args):
         pass
     if want > UPSTREAM_STARTUP_TIMEOUT_MAX:
         log(f"[WARN] NEKO_PLUGIN_STARTUP_TIMEOUT={want:g} 超过上游上限 "
-            f"{UPSTREAM_STARTUP_TIMEOUT_MAX:g}s（plugin/settings.py:790 会 raise ValueError），已夹紧")
+            f"{UPSTREAM_STARTUP_TIMEOUT_MAX:g}s（plugin/settings.py:768 会 raise ValueError），已夹紧")
         want = UPSTREAM_STARTUP_TIMEOUT_MAX
     env["NEKO_PLUGIN_STARTUP_TIMEOUT"] = str(want)
     return env
@@ -768,26 +768,42 @@ def _alive_from_state(state):
     return state != "Z"
 
 
-def _pid_really_alive(pid):
-    """进程还在不在，僵尸算「不在」。"""
-    if os.name == "nt":
-        return _pid_cmdline(pid)[1]
+def _pid_really_alive(pid, nt_probe=None, read_stat=None, run_ps=None, on_nt=None):
+    """进程还在不在，僵尸算「不在」。四个口子可注入，自检才能在 CI 与本机都跑满分支。
+
+    2026-11-17 加接缝（与 _posix_cmdline、_wait_gone 同一口径）：这是 stop 路径上最后一个
+    没有用例的探针，而它本月改过两次（Z 态、稀疏格子）。on_nt 让自检能在 ubuntu 上验 Windows
+    那一支，也能在 Windows 上验 /proc 那一支；不传就按真实平台走。
+    """
+    pid = int(pid)
+    if (os.name == "nt" if on_nt is None else on_nt):
+        return (nt_probe or (lambda p: _pid_cmdline(p)[1]))(pid)
+
+    def _stat(p):
+        with open("/proc/%d/stat" % p, encoding="utf-8", errors="replace") as f:
+            return f.read()
+
+    def _ps(p):
+        r = subprocess.run(["ps", "-o", "state=", "-p", str(p)],
+                           capture_output=True, timeout=20)
+        return r.returncode, r.stdout
+
+    read_stat = read_stat or _stat
+    run_ps = run_ps or _ps
     try:
-        with open("/proc/%d/stat" % int(pid), encoding="utf-8", errors="replace") as f:
-            verdict = _alive_from_state(_state_from_stat(f.read()))
+        verdict = _alive_from_state(_state_from_stat(read_stat(pid)))
         if verdict is not None:
             return verdict
     except FileNotFoundError:
         return False            # /proc/<pid> 整目录没了 = 已经回收
     except OSError:
-        return True
+        return True             # 读不动就当作还在：宁可多说一次「没停」，不可谎报已停
     try:
-        r = subprocess.run(["ps", "-o", "state=", "-p", str(int(pid))],
-                           capture_output=True, timeout=20)
+        rc, out = run_ps(pid)
     except Exception:
         return True
-    out = r.stdout.decode("utf-8", "replace").strip()
-    if r.returncode != 0 or not out:
+    out = out.decode("utf-8", "replace").strip()
+    if rc != 0 or not out:
         return False
     verdict = _alive_from_state(out[0].upper())   # ps 会给 "S"、"Z"、"S+"、"Z+" 这类
     return True if verdict is None else verdict
@@ -846,6 +862,17 @@ def cmd_stop(args):
     pid = st.get("pid")
     if not pid:
         die("状态文件里没有 pid")
+    # 状态文件是磁盘上的旧 JSON，可能被手改过或被别的版本写过。
+    # 非数字的 pid 以前一路走到 "%d" 格式化里抛 ValueError，整轮 stop 没有一句人话。
+    # float 也拒：int(1.5) 会静默截成 1，然后拿 pid=1 去问操作系统，那不是任何人想要的行为。
+    if isinstance(pid, bool) or not isinstance(pid, (int, str)):
+        die("状态文件里的 pid 类型不对（%r）。先核对端口归属，再手工删 %s" % (pid, STATE_FILE))
+    try:
+        pid = int(pid)
+    except (TypeError, ValueError):
+        die("状态文件里的 pid 不是数字（%r）。先核对端口归属，再手工删 %s" % (pid, STATE_FILE))
+    if pid <= 0:
+        die("状态文件里的 pid 不合法（%d）。先核对端口归属，再手工删 %s" % (pid, STATE_FILE))
     cmd, alive = _pid_cmdline(pid)
     verdict = pid_verdict(cmd)
     action = stop_action(verdict, alive, args.force)
@@ -876,8 +903,8 @@ def cmd_stop(args):
 def _plugin_rows(payload):
     """把 /plugins 或 /plugin/status 的返回统一成 [(plugin_id, 状态摘要)]。
 
-    /plugins        -> {"plugins": [ {...}, ... ], "message": str}   （query_service.py:885）
-    /plugin/status  -> {"plugins": { "<id>": {...} }, "time": iso}   （query_service.py:831）
+    /plugins        -> {"plugins": [ {...}, ... ], "message": str}   （query_service.py:887-890）
+    /plugin/status  -> {"plugins": { "<id>": {...} }, "time": iso}   （query_service.py:833-836）
     这两种形状一个是 list、一个是 dict，早先的版本只处理了 list，导致 /plugin/status 一条都打不出来。
     """
     rows = []
@@ -1141,7 +1168,7 @@ def _self_test():
         x_gr = _plugin_rows(x_payload)
         if x_gr != x_wr:
             bad.append("_plugin_rows(%r) 期望 %r，得到 %r" % (x_payload, x_wr, x_gr))
-    # 第三组：上游 plugin/settings.py:790 对 >300 直接 raise，服务在 import 阶段就崩。
+    # 第三组：上游 plugin/settings.py:768 对 >300 直接 raise，服务在 import 阶段就崩。
     x_env0 = os.environ.get("NEKO_PLUGIN_STARTUP_TIMEOUT")
     x_hosted0 = os.environ.get("NEKO_PLUGIN_HOSTED_BY_AGENT")
     os.environ["NEKO_PLUGIN_HOSTED_BY_AGENT"] = "1"   # 不带进来就验不出「清掉」这一步
@@ -1216,9 +1243,65 @@ def _self_test():
     finally:
         globals()["http_get"] = _real_get
         shutil.rmtree(hw_root, ignore_errors=True)
+    # 2026-11-17 补：_pid_really_alive 是 stop 路径上最后一个没用例的探针，本月改过两次。
+    # 三条分支（nt、/proc、ps）都靠注入演，Windows 与 ubuntu 上跑同一组断言。
+    ra_n = 0
+    ra_cases = [
+        (lambda p: "242 (python3) S 1 242 242 0 -1 42 1 1", None, True),     # 正常睡眠 = 还在
+        (lambda p: "242 (python3) Z 1 242 242 0 -1 42 1 1", None, False),    # 僵尸 = 已退
+        (lambda p: "242 (python3) D 1 242 242 0 -1 42 1 1", None, True),     # 不可中断 IO 仍算在
+        (lambda p: (_ for _ in ()).throw(FileNotFoundError()), None, False),  # /proc 整目录没了
+        (lambda p: (_ for _ in ()).throw(PermissionError()), None, True),     # 读不动就当作还在
+        ("242 broken-stat-line", lambda p: (0, b"S"), True),                  # stat 解析不出→退回 ps
+        ("242 broken-stat-line", lambda p: (0, b"Z"), False),
+        ("242 broken-stat-line", lambda p: (0, b"Z+"), False),
+        ("242 broken-stat-line", lambda p: (0, b"S+"), True),
+        ("242 broken-stat-line", lambda p: (1, b""), False),                  # ps 说没有这个 pid
+        ("242 broken-stat-line", lambda p: (0, b""), False),
+        ("242 broken-stat-line",
+         lambda p: (_ for _ in ()).throw(OSError("ps 没了")), True),          # ps 跑不了，不判已退
+    ]
+    for stat_src, ps_src, want_ra in ra_cases:
+        ra_n += 1
+        ra = stat_src if callable(stat_src) else (lambda p, _t=stat_src: _t)
+        got_ra = _pid_really_alive(242, read_stat=ra, run_ps=ps_src, on_nt=False)
+        if got_ra is not want_ra:
+            bad.append("_pid_really_alive(stat=%r, ps=%r) 期望 %r，得到 %r"
+                       % (stat_src if isinstance(stat_src, str) else "callable", ps_src,
+                          want_ra, got_ra))
+    # nt 那一支同样用注入演，两边平台都能验（on_nt=True 时不碰 PowerShell）
+    ra_n += 1
+    if _pid_really_alive(242, on_nt=True, nt_probe=lambda p: False) is not False:
+        bad.append("nt 分支没把 nt_probe 的 False 传出来")
+    ra_n += 1
+    if _pid_really_alive(242, on_nt=True, nt_probe=lambda p: True) is not True:
+        bad.append("nt 分支没把 nt_probe 的 True 传出来")
+
+    # 状态文件里的 pid 不是数字时，cmd_stop 要说人话，不许抛 ValueError 让整轮 stop 消失。
+    stop_root = Path(tempfile.mkdtemp(prefix="sb-badpid-"))
+    try:
+        for bad_pid in ("abc", 0, -7, {"n": 1}, 1.5, True):
+            ra_n += 1
+            (stop_root / STATE_FILE).write_text(json.dumps(
+                {"pid": bad_pid, "port": 43117, "root": str(stop_root),
+                 "mode": "start"}), encoding="utf-8")
+            cap = io.StringIO()
+            code = None
+            with contextlib.redirect_stderr(cap):
+                try:
+                    cmd_stop(argparse.Namespace(root=str(stop_root), force=False))
+                except SystemExit as e:
+                    code = e.code
+            msg = cap.getvalue()
+            if code == 0 or "pid" not in msg:
+                bad.append("坏 pid %r 没被人话拦住（退出码 %r，消息 %r）" % (bad_pid, code, msg[:80]))
+            if not (stop_root / STATE_FILE).exists():
+                bad.append("坏 pid %r 那一步不该顺手删掉状态文件" % (bad_pid,))
+    finally:
+        shutil.rmtree(stop_root, ignore_errors=True)
     total = (len(keep) + len(drop) + 9 + len(stop_cases) + 4 + len(posix_cases) + 1
              + len(stat_cases) + len(alive_cases) + 4 + len(x_tomls) + len(x_flags)
-             + len(x_rows) + x_n + 5) + _symlink_cases(bad)
+             + len(x_rows) + x_n + 5 + ra_n) + _symlink_cases(bad)
     print("SANDBOX SELF-TEST: %s（%d 项）" % ("PASS" if not bad else "FAIL", total))
     for m in bad:
         print("  FAIL:", m)
