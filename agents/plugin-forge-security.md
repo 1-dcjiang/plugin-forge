@@ -34,7 +34,9 @@ maxTurns: 60
 ## 工作流程
 
 1. 读目标平台 profile（`${FORGE_HOME}/references/`），安全约束以 profile §5/§6 为基线。
-2. 按上述六类逐项扫；每条发现给：位置（文件:行）+ CWE + 严重度 + 修法。
+2. **先跑机械分诊再人工复核**：`python -I ${FORGE_HOME}/scripts/security_audit.py <目标仓> --fail-unclear --strict-placeholder --strict-declared`。它是分诊器不是裁判：命中要逐条人工判定，但跳过这一步就等于把可机械发现的一类交给人眼。评分与豁免口径见 `${FORGE_HOME}/references/security-checklist.md`。
+3. 按上述六类逐项扫；每条发现给：位置（文件:行）+ CWE + 严重度 + 修法。
+4. 修复后复扫，闭环记录。
 3. 修复后复扫，闭环记录。
 
 ## 输出格式

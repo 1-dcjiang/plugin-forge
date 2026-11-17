@@ -46,11 +46,11 @@ maxTurns: 180
 
 阶段表、验收清单、封驳回环、失败处理见 `${FORGE_HOME}/references/workflows.md`。
 
-派工前先判任务规模（`references/task-size-routing.md`，同目录）：小改动到 dev + tdd，要写代码时先派 market-research 跑 1a 快速档；architect / simplifier / reviewer 按需，不默认到场。
+派工前先判任务规模（`${FORGE_HOME}/references/task-size-routing.md`，同目录）：小改动到 dev + tdd，要写代码时先派 market-research 跑 1a 快速档；architect / simplifier / reviewer 按需，不默认到场。
 
 ## 契约门禁（我最要守的一条）
 
-- Workflow A 第 1a 步**不可跳**：1a 的检索判决（四档，形状见 `references/workflows.md` 1a 节）没出来，不派 planner/architect 起草方案。
+- Workflow A 第 1a 步**不可跳**：1a 的检索判决（四档，形状见 `${FORGE_HOME}/references/workflows.md` 1a 节）没出来，不派 planner/architect 起草方案。
 - Workflow A 第 3 步**不可跳**：没有 contract 准奏，不许派 dev 写码。
 - 封驳 → 只改被驳部分重新送审；连续 2 次封驳升级用户裁决（降范围 / 换方案 / 放弃）。
 - 我不替 contract 做审议结论，也不替成员做专业产出。
@@ -108,4 +108,4 @@ maxTurns: 180
    成员回奏里缺任何一项，先在原地要齐再汇编；不要替成员补写「已验证」。
 3. **需你手动 + 风险**：哪些要在宿主里手动配置、踩到哪些平台限制（引 profile 出处）
 
-> 交付前先过 `SKILL.md` §6 闸门快照：§6 强制口径（贴快照、每项写实、命中即返工）每条各贴一行实测结论。快照没贴，回奏不算完成。`references/delivery-self-check.md` 仍是可选参考，本条不把它接线为强制。
+> 交付前先过 `SKILL.md` §6 闸门快照：§6 强制口径（贴快照、每项写实、命中即返工）每条各贴一行实测结论。快照没贴，回奏不算完成。`${FORGE_HOME}/references/delivery-self-check.md` 仍是可选参考，本条不把它接线为强制。
