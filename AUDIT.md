@@ -943,6 +943,21 @@ coopanion-forge 那边 `pnpm install` 进工作区以后，`JSON artifacts parse
 - 反证 25（`forge-scratch/run_controls25.py`）三臂：撤 `isdir` 守卫、撤 `samefile` 判别、
   探测失败改放行 —— 各退 1 且红在对应那条；对照组绿
 
+### JSON 产物解析步的判据用错方言（姊妹仓 CI 红了三次才定位）
+
+现象：coopanion-forge 的 `JSON artifacts parse` 连红三次，每次只给一句
+`Expecting property name enclosed in double quotes: line 2 column 3`，不点名文件。
+逐层排除后真凶是本仓那份 `sync-check.yml` 的同一条判据：三份模板的 `tsconfig.json`
+是 JSONC（TypeScript 按带注释的 JSON 读它），本步却用严格 `json.load` 判它。
+判据用错方言，不是产物坏了。
+
+- 本步现在：排除 vendored 目录、排除 JSONC 家族、失败时逐个点名文件再退 1
+- 分隔符先归一化。前版只认正斜杠：Linux 对，Windows 上 glob 给反斜杠就不认，同一条判据两边相反
+- 反证（`forge-scratch/jsonneg/`）：夹具同时放真坏文件、vendored 包、JSONC 三种，
+  输出只点名真坏那一个并退 1
+- 两仓实跑：本仓 5 个产物退 0；姊妹仓 15 个退 0，CI run `44119780658` 与 `44120167080` 全绿
+- 教训写进口径：门禁报错必须点名到文件。只给一行异常文本的判据，坏了三次也定位不到根因
+
 ### 仍未处理（写清楚，不算已解决）
 
 - `--include-docs` 没接进 CI：本仓文档里有大量示例文本会撞 SEC-1/3/4，逐条人工判过才能豁免。
