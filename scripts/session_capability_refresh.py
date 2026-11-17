@@ -22,9 +22,12 @@ NEKO 专家团 · SessionStart 能力底座变更检测 hook（只读 / 零依�
   - 永不阻塞：任何异常均被捕获，输出合法 HookOutput JSON 并 exit 0。
 
 维护
+  python session_capability_refresh.py --self-test  # 离线自检（CI 阻塞跑），不读用户目录也不写文件
   python session_capability_refresh.py --regen   # 只读打印当前指纹字典，用于刷新 BASELINE
   BASELINE 常量须与 references/capability-baseline.md 同步维护。
   已知例外: --regen 以 print 输出多行纯文本（非 HookOutput JSON）；禁止把 --regen 用于 hooks 命令。
+  已知例外 2: --self-test 会在系统临时目录建两个夹具文件测 _read 的上限与 BOM，跑完即删。
+    hook 自身运行路径（不带参数那次）仍然只读，绝不写文件、不建目录。
 
 注意
   ~/.workbuddy/settings.json 才是本机 WorkBuddy 生效配置；
@@ -182,7 +185,15 @@ def collect_fingerprints():
         notes.append("内部 8s 软截止触发，剩余检测跳过: " + _safe(str(e)))
     return cur, truncated, notes
 
-def build_context(cur, truncated, notes):
+def build_context(cur, notes, read=None, exists=None):
+    """把当前指纹与 BASELINE 比成一段上下文文本。
+
+    read / exists 是两个注入接缝（与 _posix_cmdline、_wait_gone 同一口径）：不注入就读真机，
+    注入就能在 CI 里离线跑满全部差异形状。2026-11-17 起本函数不再收 truncated 形参——
+    函数体从没读过它，降级判断在 main 里做。
+    """
+    read = read or _read
+    exists = exists or os.path.isfile
     diffs, snap = [], []
     for k, base in BASELINE["scalars"].items():
         c = cur["scalars"].get(k, "<NOT_SCANNED>")
@@ -207,12 +218,12 @@ def build_context(cur, truncated, notes):
         diffs.append("  - skills 数量: %s -> %s" % (BASELINE["skills_count"], cur["skills_count"]))
     if cur["skills_fp"] and cur["skills_fp"] != BASELINE["skills_fp"]:
         diffs.append("  - skills 清单指纹变化（增删技能；清单由 Task A 维护）")
-    missing = [p for p in HOOK_SCRIPTS if not os.path.isfile(p)]
+    missing = [p for p in HOOK_SCRIPTS if not exists(p)]
     for p in missing:
         diffs.append("  - Hook 脚本缺失: " + _safe(p.replace(os.path.expanduser("~/"), "~/")))
 
     try:
-        ms = _read(ROOT + "/mcp.json").get("mcpServers", {})
+        ms = read(ROOT + "/mcp.json").get("mcpServers", {})
         en = [k for k, v in ms.items() if not v.get("disabled", False)]
         dis = [k for k, v in ms.items() if v.get("disabled", False)]
         snap.append("MCP 主配置 %d 项 | 启用 %d 项 (fp %s) | 禁用 %d 项 (fp %s)"
@@ -222,7 +233,7 @@ def build_context(cur, truncated, notes):
     snap.append("连接器目录模板 %s 项（全 disabled；运行时启用状态未在本快照核验）"
                 % cur["scalars"].get("mcp.catalog.count", "?"))
     try:
-        h = _read(ROOT + "/settings.json").get("hooks", {})
+        h = read(ROOT + "/settings.json").get("hooks", {})
         ncmd = sum(len(e.get("hooks", [])) for g in h.values() for e in g)
         snap.append("生效配置 ~/.workbuddy/settings.json: hooks %d 事件 / %d 条命令；~/.codebuddy/settings.json 另有另一套 hindsight codebuddy-* 并存" % (len(h), ncmd))
     except Exception:
@@ -231,7 +242,7 @@ def build_context(cur, truncated, notes):
                 % (len(cur["marketplace_dirs"]), len(cur["marketplaces"])))
     try:
         snap.append("专家团插件 neko-plugin-ops v%s（my-experts 共 %s 个插件）"
-                    % (_safe(_read(NEKO + "/.codebuddy-plugin/plugin.json").get("version", "?"), 16),
+                    % (_safe(read(NEKO + "/.codebuddy-plugin/plugin.json").get("version", "?"), 16),
                        _safe(cur["marketplaces"].get("my-experts", {}).get("plugins", "?"), 8)))
     except Exception:
         snap.append("插件版本快照不可用")
@@ -271,6 +282,231 @@ def emit(context):
     sys.stdout.write(json.dumps(payload, ensure_ascii=True) + "\n")
     sys.stdout.flush()
 
+def _self_test():
+    """离线自检：只测纯函数与注入接缝，不读用户目录，不联网。
+
+    2026-11-17 加。这个 hook 每个会话都跑，以前 CI 只做 py_compile，等于零覆盖。
+    重点钉三条：S8 的输出形态、S10 的永不阻塞、以及差异文本的截断。
+    自检只在系统临时目录里建两个夹具文件（测 _read 的上限与 BOM），hook 的运行路径照旧一个文件都不写。
+    """
+    import contextlib
+    import io
+
+    bad = []
+    n = [0]
+
+    def chk(label, cond):
+        n[0] += 1
+        if not cond:
+            bad.append(label)
+
+    # 1) 消毒与指纹
+    chk("_safe 把空白与斜杠压成下划线", _safe("a b/c\td") == "a_b_c_d")
+    chk("_safe 截到 n 个字符", len(_safe("x" * 200, 64)) == 64)
+    chk("_norm 与键序无关", _norm({"b": 1, "a": 2}) == _norm({"a": 2, "b": 1}))
+    chk("_fp 长度 12", len(_fp({"a": 1})) == 12)
+    chk("_fp 同输入同值", _fp({"a": [1, 2]}) == _fp({"a": [1, 2]}))
+    chk("_fp 分辨值变化", _fp({"a": 1}) != _fp({"a": 2}))
+
+    # 2) 四个抽取器只取该取的键，多余字段不许混进指纹
+    mcp = _ext_mcp({"mcpServers": {"z": {"url": "u", "extra": 1}, "a": {"command": "c"}}})
+    chk("_ext_mcp 按字典序且丢掉清单外的键",
+        list(mcp) == ["a", "z"] and "extra" not in mcp["z"])
+    st = _ext_settings({"hooks": {"H": 1}, "enabledPlugins": {"p": True}, "theme": "x"})
+    chk("_ext_settings 只留两项", sorted(st) == ["enabledPlugins", "hooks"])
+    mk = _ext_mkt({"name": "m", "extra": 2,
+                   "plugins": [{"name": "p", "version": "1", "source": "s", "junk": 1}]})
+    chk("_ext_mkt 只留 name 与插件三字段",
+        mk == {"name": "m", "plugins": [{"name": "p", "version": "1", "source": "s"}]})
+    pl = _ext_plugin({"version": "1", "agents": ["a"], "teamInfo": {}, "expertType": "t", "other": 9})
+    chk("_ext_plugin 只留四字段", sorted(pl) == ["agents", "expertType", "teamInfo", "version"])
+
+    # 3) _read 的两条：256KB 上限与 BOM。夹具写在系统临时目录里，脚本运行路径仍一个文件都不写。
+    #    用临时夹具而不是仓库里的 roster.json：自检要能在任何一份拷贝里跑，包括装机面与副本。
+    import shutil
+    import tempfile
+    td = tempfile.mkdtemp(prefix="cap-self-")
+    try:
+        big = os.path.join(td, "big.json")
+        with open(big, "wb") as f:
+            f.write(b'{"a":"' + b"x" * (300 * 1024) + b'"}')
+        refused = False
+        try:
+            _read(big)
+        except ValueError:
+            refused = True
+        chk("_read 拒绝超过 256KB 的文件", refused)
+        small = os.path.join(td, "small.json")
+        with open(small, "wb") as f:
+            f.write("﻿".encode("utf-8") + b'{"members": [{"agent_id": "x"}]}')
+        chk("_read 吃下 BOM 并解析", isinstance(_read(small).get("members"), list))
+        missing_ok = False
+        try:
+            _read(os.path.join(td, "nope.json"))
+        except OSError:
+            missing_ok = True
+        chk("_read 缺文件时抛 OSError，交给调用方记 <UNREADABLE>", missing_ok)
+    except OSError as e:
+        chk("_read 那组夹具没跑成（%s）" % type(e).__name__, False)
+    finally:
+        shutil.rmtree(td, ignore_errors=True)
+
+    # 4) build_context 的差异形状，全走注入接缝
+    base = {"scalars": dict(BASELINE["scalars"]),
+            "marketplaces": dict(BASELINE["marketplaces"]),
+            "marketplace_dirs": list(BASELINE["marketplace_dirs"]),
+            "skills_count": BASELINE["skills_count"],
+            "skills_fp": BASELINE["skills_fp"]}
+    ok_read = lambda p: {"mcpServers": {}, "hooks": {}, "version": "1.6.0"}
+    all_there = lambda p: True
+
+    def cur(**kw):
+        d = {k: (dict(v) if isinstance(v, dict) else list(v) if isinstance(v, list) else v)
+             for k, v in base.items()}
+        d.update(kw)
+        return d
+
+    ctx = build_context(base, [], read=ok_read, exists=all_there)
+    chk("基线一致时说无变更", "无变更（基线一致" in ctx)
+    chk("无变更时也给出最后核验日期", BASELINE_DATE in ctx)
+    chk("基线一致时差异段写无", "无（与基线一致）" in ctx)
+
+    ctx = build_context(cur(scalars=dict(base["scalars"], **{"mcp.workbuddy": "deadbeef0000"})),
+                        [], read=ok_read, exists=all_there)
+    chk("标量变更报出基线值与当前值",
+        "mcp.workbuddy: 基线 %s -> 当前 deadbeef0000" % BASELINE["scalars"]["mcp.workbuddy"] in ctx)
+
+    mp = dict(base["marketplaces"])
+    mp["brand_new"] = {"fp": "fff", "plugins": 1}
+    del mp["experts"]
+    mp["my-experts"] = {"fp": "e5c3984b0016", "plugins": 4}
+    ctx = build_context(cur(marketplaces=mp,
+                            marketplace_dirs=base["marketplace_dirs"] + ["zzz_dir"],
+                            skills_count=BASELINE["skills_count"] + 3,
+                            skills_fp="0" * 12),
+                        [], read=ok_read, exists=all_there)
+    for kind in ("marketplace 清单新增", "marketplace 清单删除", "marketplace 变更",
+                 "新增 marketplace 目录", "skills 数量", "skills 清单指纹变化"):
+        chk("差异种类 " + kind, kind in ctx)
+    chk("没删目录就不报删目录", "删除 marketplace 目录" not in ctx)
+
+    ctx = build_context(cur(marketplace_dirs=[d for d in base["marketplace_dirs"]
+                                              if d != "plugin-data"]),
+                        [], read=ok_read, exists=all_there)
+    chk("删掉的目录要报删除", "删除 marketplace 目录" in ctx)
+
+    # 5) Hook 脚本缺失：单独成行，就绪计数跟着掉
+    half = lambda p: not p.endswith("workbuddy-stop-hook.js")
+    ctx = build_context(base, [], read=ok_read, exists=half)
+    chk("缺失的 Hook 脚本要单列", "Hook 脚本缺失" in ctx)
+    chk("就绪计数按缺失扣减",
+        "Hook 脚本就绪: %d/%d" % (len(HOOK_SCRIPTS) - 1, len(HOOK_SCRIPTS)) in ctx)
+
+    # 6) 快照取不到时降级成说明，不许抛
+    def boom(p):
+        raise OSError("取不到")
+
+    ctx = build_context(base, [], read=boom, exists=all_there)
+    for kind in ("MCP 主配置快照不可用", "settings 快照不可用", "插件版本快照不可用"):
+        chk("降级句 " + kind, kind in ctx)
+    chk("连接器目录模板那句照常输出", "连接器目录模板" in ctx)
+
+    # 7) 截断：差异超过 20 条只列 20 条，整段超 2000 字符要带 truncated=1
+    many_scalars = {k: "v%02d%s" % (i, "f" * 10) for i, k in enumerate(BASELINE["scalars"])}
+    many_mp = {("mk%03d" % i): {"fp": "f" * 12, "plugins": i} for i in range(40)}
+    ctx = build_context(cur(scalars=many_scalars, marketplaces=many_mp,
+                            marketplace_dirs=[], skills_count=-1, skills_fp=""),
+                        ["读取异常甲", "带\n换行的异常"], read=ok_read, exists=all_there)
+    chk("差异超过 20 条只列 20 条", "另有 43 项" in ctx and len(ctx) <= 2000)
+    chk("读取异常里的裸换行被消毒", "带\n换行的异常" not in ctx.split("读取异常:")[-1])
+    # 整段超 2000 字符是另一条独立护栏：用足够长的读取异常把它顶过去
+    long_notes = ["异常" + ("详" * 300) + chr(10) + "尾%d" % i for i in range(9)]
+    ctx2 = build_context(cur(scalars=many_scalars, marketplaces=many_mp,
+                             marketplace_dirs=[], skills_count=-1, skills_fp=""),
+                         long_notes, read=ok_read, exists=all_there)
+    chk("整段超 2000 字符时截到 2000 并打标记", len(ctx2) <= 2000 and ctx2.endswith("truncated=1"))
+    chk("异常条数只列 8 条", ctx2.count("异常详") <= 8)
+    chk("证据行说明未联网核验", "[未联网核验]" in ctx)
+    chk("有差异时补一句只读观测", "差异为只读观测结果" in ctx)
+
+    # 8) S8 输出形态：顶层只有 hookSpecificOutput，且必须是合法 JSON
+    real_out = sys.stdout
+    buf = io.StringIO()
+    try:
+        sys.stdout = buf
+        emit("多行\n上下文 中文")
+    finally:
+        sys.stdout = real_out
+    line = buf.getvalue()
+    try:
+        got = json.loads(line)
+    except ValueError:
+        got = None
+    chk("emit 输出是合法单行 JSON", isinstance(got, dict) and line.count(chr(10)) == 1)
+    chk("S8 顶层只有 hookSpecificOutput", isinstance(got, dict) and list(got) == ["hookSpecificOutput"])
+    ho = (got or {}).get("hookSpecificOutput", {})
+    chk("事件名是 SessionStart", ho.get("hookEventName") == "SessionStart")
+    chk("additionalContext 原样带出", ho.get("additionalContext") == "多行\n上下文 中文")
+    chk("ensure_ascii 生效，字节里没有裸中文", all(ord(c) < 128 for c in line))
+
+    # 9) S10：扫描炸了也要合法 JSON 且 exit 0。stdin 要换掉，CI 里没人关管道会挂住
+    real_collect, real_argv, real_stdin = collect_fingerprints, sys.argv, sys.stdin
+
+    def explode():
+        raise RuntimeError("扫描器炸了")
+
+    class _NoStdin(object):
+        @staticmethod
+        def read():
+            return ""
+
+    try:
+        globals()["collect_fingerprints"] = explode
+        sys.argv = ["session_capability_refresh.py"]
+        sys.stdin = _NoStdin
+        buf = io.StringIO()
+        sys.stdout = buf
+        try:
+            rc = main()
+        finally:
+            sys.stdout = real_out
+        chk("异常路径退 0", rc == 0)
+        chk("异常路径给降级文本",
+            json.loads(buf.getvalue())["hookSpecificOutput"]["additionalContext"] == FALLBACK_CONTEXT)
+        chk("降级文本声明不写文件", "不写任何文件" in FALLBACK_CONTEXT)
+
+        globals()["collect_fingerprints"] = lambda: (base, True, ["部分结果"])
+        buf = io.StringIO()
+        sys.stdout = buf
+        try:
+            rc = main()
+        finally:
+            sys.stdout = real_out
+        chk("软截止路径退 0", rc == 0)
+        chk("截止时不输出部分结果",
+            json.loads(buf.getvalue())["hookSpecificOutput"]["additionalContext"] == FALLBACK_CONTEXT)
+
+        globals()["collect_fingerprints"] = lambda: (base, False, [])
+        buf = io.StringIO()
+        sys.stdout = buf
+        try:
+            rc = main()
+        finally:
+            sys.stdout = real_out
+        chk("正常路径退 0", rc == 0)
+        chk("正常路径输出完整上下文",
+            "会话启动检测" in json.loads(buf.getvalue())["hookSpecificOutput"]["additionalContext"])
+    finally:
+        globals()["collect_fingerprints"] = real_collect
+        sys.argv = real_argv
+        sys.stdin = real_stdin
+
+    print("能力刷新自检 %d 项：%s" % (n[0], "全部通过" if not bad else "%d 项失败" % len(bad)))
+    for m in bad:
+        print("  FAIL:", m)
+    return 0 if not bad else 1
+
+
 def main():
     try:
         try:
@@ -278,23 +514,26 @@ def main():
             sys.stderr.reconfigure(encoding="utf-8", errors="replace")
         except Exception:
             pass
+        # --self-test 必须排在 stdin 读取之前：CI 里没人关 stdin，先读就挂住（同 --regen 的理由）。
+        if "--self-test" in sys.argv:
+            return _self_test()
         # 维护模式必须先于 stdin 读取：--regen 常在交互式终端手动执行，
         # 若先 sys.stdin.read() 会因等待 EOF 而挂起（宿主/终端未关闭 stdin）。
         if "--regen" in sys.argv:
             cur, _, _ = collect_fingerprints()
             print(json.dumps(cur, indent=2, ensure_ascii=False))
             return 0
+        # 读而不解：本 hook 不使用 payload 里任何字段，读的目的只是把 stdin 排空，
+        # 免得宿主等 EOF。2026-11-17 去掉旧版那句没人读的 json.loads。
         try:
-            raw = sys.stdin.read()
-            inp = json.loads(raw) if raw.strip() else {}
+            sys.stdin.read()
         except Exception:
-            inp = {}
+            pass
         cur, truncated, notes = collect_fingerprints()
         if truncated:
             emit(FALLBACK_CONTEXT)
             return 0
-        ctx = build_context(cur, truncated, notes)
-        emit(ctx)
+        emit(build_context(cur, notes))
         return 0
     except Exception:
         # S10：固定单行 JSON、零动态文本；emit() 再包一层 try/except，
