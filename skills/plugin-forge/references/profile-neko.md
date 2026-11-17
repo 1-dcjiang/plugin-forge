@@ -65,7 +65,7 @@ gh api repos/Project-N-E-K-O/N.E.K.O/contents/scripts/custom_channels/neko_chann
   `@plugin_entry`:88、`@lifecycle`:127（**六个**取值 `startup`/`shutdown`/`reload`/`freeze`/`unfreeze`/`config_change`，`plugin/sdk/plugin/decorators.py: lifecycle` 形参 id 的 Literal，129 行读于 db81c1be0，2026-11-17）、`@message`:137、
   `@timer_interval`:156、`@custom_event`:175、`@hook`:200、`@before_entry`:210、`@after_entry`:219、
   `@around_entry`:228、`@replace_entry`:237、`@quick_action`:246。`kind` 默认 `"action"`（`custom_event` 为 `"custom"`）
-  `[FACT] decorators.py: on_event 与 plugin_entry 签名的 kind 默认 "action"、custom_event 签名的 kind 默认 "custom"（裸行号 64、95、182 读于 acfbdbc50，2026-11-15；_PluginDecorators 另有私有镜像 263/302/391，纯 grep 会多命中）`。
+  `[FACT] plugin/sdk/plugin/decorators.py: on_event 与 plugin_entry 签名的 kind 默认 "action"、custom_event 签名的 kind 默认 "custom"。这三处都是 `kind: EntryKind` 那一行，行号 64、95、182，读于 e14f61963，2026-11-17；`_PluginDecorators` 另有私有镜像，行号 263、302、391，纯 grep 会多命中）`。
 - 所有入口、生命周期、定时器、消息处理器**必须 `async def`**。
 - 一律从 `plugin.sdk.plugin` 导入；**`plugin.sdk.shared` 是内部实现细节，不应直接导入**（这句的出处是下一行引的 sdk 根 docstring；SKILL.md 只禁「新增」shared 导入，口径更窄）
   `[FACT] plugin/sdk/__init__.py:9-10（docstring 原文：shared 是 internal implementation detail、should NOT be imported directly by plugin developers）；.agent/skills/neko-plugin/SKILL.md:18（Prefer public SDK facades 那句，69 同文档）、docs/plugins/sdk-reference.md:29（supported developer import surface 那句）口径较窄，前者只禁「新增」shared 导入，后者只谈受支持导入面（均读于 db81c1be0，2026-11-17；旧 plugin/PLUGIN_DEVELOPMENT_GUIDE.md 已从 main 删除，全 profile 的 GUIDE: 速记失效）`（`plugin/sdk/shared/__init__.py` 1-5 行自述为 lower-level primitives，部分仍在演进；行号读于 db81c1be0，2026-11-17）。

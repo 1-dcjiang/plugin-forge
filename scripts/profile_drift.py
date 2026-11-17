@@ -49,16 +49,18 @@ NL = chr(10)
 PATH_RE = re.compile(r"(?<![\w/.\-])((?:plugin|app|config|docs|nekoclaw|memory|launcher_core|"
                      r"main_logic|\.agent|utils|brain)/[\w./\-]*\.(?:py|md|toml|json|js|ts))")
 IDENT_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]{3,}")
-# 认这五种形状：NNN 行、NNN-NNN 行（区间也要，旧版因为 lookbehind 挡了连字符，
+# 认这六种形状：NNN 行、NNN-NNN 行（区间也要，旧版因为 lookbehind 挡了连字符，
 # 「实测为 105-113 行」整条抽不出来，那一行的锚点完全不在门禁里）、:NNN、（NNN 或（NNN/NNN、
-# 带标签的「id 212、name 213」。issue 号带 #、章节号带 §，都不会被吃进来。
-# 最后一种必须跟在短标签后并以顿号或括号收尾，否则「见 4.2 与自查 5、6、8」这种句子编号会被当成行号——
-# 第一版探针就在这里报了 8 条假漂移。
+# 带标签的「id 212、name 213」，以及「行号 64、95、182」这种带「行号」标签的顿号列。
+# issue 号带 #、章节号带 §，都不会被吃进来。
+# 第五种必须跟在短标签后并以顿号或括号收尾，否则「见 4.2 与自查 5、6、8」这种句子编号会被当成行号——
+# 第一版探针就在这里报了 8 条假漂移。第六种必须有「行号」两字打头，同一句话里光秃秃的数字不吃。
 NUM_PATTERNS = (re.compile(r"(?<![\w.\-])(\d{1,5})(?=\s*行)"),
                 re.compile(r"(?<![\w.])(\d{1,5})\s*[-–]\s*(\d{1,5})(?=\s*行)"),
                 re.compile(r":(\d{1,5})(?![\d%])"),
                 re.compile(r"[（(]\s*(\d{1,5}(?:\s*[/、,]\s*\d{1,5})*)"),
-                re.compile(r"(?<=[A-Za-z_] )(\d{1,5})(?=[、，,)）])"))
+                re.compile(r"(?<=[A-Za-z_] )(\d{1,5})(?=[、，,)）])"),
+                re.compile(r"行号\s*((?:\d{1,5}\s*[、，,]\s*)*\d{1,5})(?![\d\-–])"))
 STOPWORDS = {"plugin", "read", "line", "sha", "fact", "def", "main", "code", "true", "false",
              "none", "str", "int", "bool", "list", "dict", "self", "return", "import", "from",
              "https", "http", "www", "md", "py", "toml", "json", "get", "post", "put", "delete",
@@ -456,6 +458,9 @@ def self_test():
         # 2026-11-17 补：区间形状的行号以前抽不出来。「实测为 105-113 行」整条锚点在门禁之外。
         (window_nums("实测为 105-113 行"), [105, 113]),
         (window_nums("旧行号 1055-1150、1693-2049 已失效"), []),
+        (window_nums("行号 64、95、182，读于 e14f61963"), [64, 95, 182]),
+        (window_nums("`kind: EntryKind` 那一行，行号 263、302、391"), [263, 302, 391]),
+        (window_nums("这三处是 12、34"), []),
         (window_nums("def :150、调用 :180、回写 :184"), [150, 180, 184]),
         # 符号锚只认文档规定的「文件:符号名」两种写法，散文里的词不算锚点
         (_anchor_symbol_span(" : MESSAGE_PLANE_PAYLOAD_MAX_BYTES 常量块"),
