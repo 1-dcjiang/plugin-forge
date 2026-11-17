@@ -1,13 +1,18 @@
 # NEKO 专家团 · 能力底座基线（Capability Baseline）
 
-> 结论先行：本基线为 **2026-11-06 当下只读扫描重算**的结果（`baseline-2026-11-06-02`），已反映插件升级到 **v1.4.0** 后的真实状态，不是照抄旧值。底座无阻断性故障；`~/.workbuddy/mcp.json` 现状为 **playwright / rea 启用、lighthouse-ops / hindsight 禁用**。存在 1 个高风险配置歧义：**双配置根并存** —— `~/.workbuddy/settings.json` 推断为本机生效配置，`~/.codebuddy/settings.json` 属旧 CodeBuddy 体系（勿挂错）。本文件是「每次会话开始完整更新」的比对基准，配套检测脚本只读注入、不落盘。
+> 结论先行：现行基线是 **`baseline-2026-11-07-02`**（本机只读重算，反映专家团 **v1.6.0**）。
+> 上一版 `baseline-2026-11-06-02`（v1.4.0 时期）已被它取代，只在 §0 历史里留痕。
+> 本文件每轮更新时只改这一行与 §0 的「基线版本 / 核验日期」，别在多处各写一个版本。底座无阻断性故障；`~/.workbuddy/mcp.json` 现状为 **playwright / rea 启用、lighthouse-ops / hindsight 禁用**。存在 1 个高风险配置歧义：**双配置根并存** —— `~/.workbuddy/settings.json` 推断为本机生效配置，`~/.codebuddy/settings.json` 属旧 CodeBuddy 体系（勿挂错）。本文件是「每次会话开始完整更新」的比对基准，配套检测脚本只读注入、不落盘。
 >
-> 自动化边界：本文件与配套脚本**只做 Sense（只读感知差异提醒）**，绝不自动化 Act（安装或更新第三方 skill / 包 / MCP / 插件）。当前**不挂** SessionStart hook，需用户单独显式同意。详见 `session-refresh-sop.md`。
+> 自动化边界：本文件与配套脚本**只做 Sense（只读感知差异提醒）**，绝不自动化 Act（安装或更新第三方 skill / 包 / MCP / 插件）。**当前状态已变（2026-11-17 实测）**：`~/.workbuddy/settings.json` 的 `hooks.SessionStart` 有 3 条，
+>   其中一条就是本检测脚本（`~/.workbuddy/hooks/session_capability_refresh.py`，timeout 10）。
+>   这条挂载发生在本文写完之后的部署动作里，本文 §6 的「未挂载」表述已过期；挂载是否需要用户同意，见 §6 与 sop §8。详见 `session-refresh-sop.md`。
 
 ## 0. 元数据
 
 - 基线版本：`baseline-2026-11-07-02`（**沙箱重构 + 升版 v1.6.0 实测重算版**：anysearch 改匿名、专家团 v1.5.0→**v1.6.0**（新增 `neko-sandbox`）、my-experts 1→**3** 插件、skills 68→**69**；前一版 `-01` 为 anysearch 新增 + v1.5.0 版，`-04` 为 security-audit 安装 + rea 升级版，`-02` 为 v1.4.0 刷新版）
-- 核验日期：**2026-11-07 23:2x**（本机只读复算；脚本 `BASELINE` 常量**仍未同步**，5 项漂移明细见 §4 末尾）
+- 核验日期：**2026-11-07 23:2x**（本机只读复算）。当时脚本 `BASELINE` 常量还没同步，5 项漂移明细见 §4 末尾；
+  同日 23:42 已同步（见下条 H6）。这两条讲的是同一天的先后两个时刻，不是两个结论。
 - **本版增量（2026-11-06 晚，用户裁决）**：① 安装 `security-audit`（来源 Cloudflare，审计 commit `c1c8a8c` = 上游 HEAD，20 文件）→ `skills` **67 → 68**、`skills_fp` `c49a435f50f7` → **`0c0c53fd5b3e`**；② `rea` **6.7.0 → 6.8.0**（与审计快照一致）→ `mcp.workbuddy` `58519682cba3` → **`780a37b38c89`**；③ `playwright` 按用户裁决**保持 `@latest`**（显式接受浮动版本风险，不再视为待修项）。
 - **✅ 脚本 `BASELINE` 已同步（H6，2026-11-07）**：用户原话「1，现在就要」明确同意立即刷新；6 处等长字面量（`BASELINE_DATE` + `mcp.workbuddy` + `plugin.neko-plugin-ops` + `my-experts` + `skills_count` + `skills_fp`），逻辑零改动，AST 抹值后完全同构，全文仅 47 字节不同。部署 H6 `b6d35cf2ff4016c6511e0cac8c91905e72b74cc8834fcc914ebf5a513d71b79c`，首跑恢复「无变更（基线一致，最后核验 2026-11-07）」。回滚点 H5 `0483245c…` 在 `hooks/session_capability_refresh.py.bak-H5-2026-11-07`。
 - 历史：H5 `0483245c…`（2026-11-06 T1 三值刷新，回滚点 H4 `cb2b02e0…` 在 `.bak-H4-2026-11-06`）。
@@ -72,7 +77,7 @@ backups.workbuddy=2  backups.codebuddy=2
 | 1 | `~/.workbuddy/mcp.json` | `mcpServers` 键集合；每项 `type/url/command/args/timeout/disabled/env` | 5 项：anysearch / playwright / rea 启用；lighthouse-ops / hindsight 禁用 | 指纹 `7d7adece4903` 不等 |
 | 2 | `~/.workbuddy/connectors/default/mcp.json` | `mcpServers` **数量**与键集合、`disabled` 状态 | 208 项，全 disabled | 指纹 `72896b8dcc73` 或计数 ≠ 208 |
 | 3 | `~/.workbuddy/skills/lexiang-knowledge-base/mcp.json` | `mcpServers.lexiang` 的 `enabled/url/headers` | enabled:true | 指纹 `c891097aa218` 不等 |
-| 4 | `~/.workbuddy/settings.json`（**推断生效根**） | **双根 hook 集合指纹之一**：`hooks`（事件名、命令串、timeout、matcher）+ `enabledPlugins` + `pluginConfigs` 受控字段 | 3 事件 / 5 命令（SessionStart×3 / UserPromptSubmit×1 / Stop×1）；4 连接器 false | 指纹 `02fb107c4263` 不等 |
+| 4 | `~/.workbuddy/settings.json`（**推断生效根**） | **双根 hook 集合指纹之一**：`hooks`（事件名、命令串、timeout、matcher）+ `enabledPlugins` 两项受控字段。**`pluginConfigs` 不参与指纹**：`_ext_settings()` 只取这两项（2026-11-17 读代码核对），所以插件配置页里的改动不会被本检测点看见，这是已知缺口，不是「已覆盖」 | 3 事件 / 5 命令（SessionStart×3 / UserPromptSubmit×1 / Stop×1）；4 连接器 false | 指纹 `02fb107c4263` 不等 |
 | 5 | `~/.codebuddy/settings.json`（**旧体系并存根**） | **双根 hook 集合指纹之二**：`hooks`（SessionStart / UserPromptSubmit / Stop 各 1 条 `codebuddy-*` 命令、timeout）+ `enabledPlugins`（该根无此键）；另按 §3.3 核对 `permissions.defaultMode` / `trustedDirectories` / `.mcp.json` / 两份 hindsight 备份 / `skills/.ef-manifest.json` 缺失属正常 | 3 事件 / 3 命令；hook 集合指纹 `684c0eef3067` | 指纹 `684c0eef3067` 不等，或任一 hook 事件增删 |
 | 6 | 6 份 `marketplaces/*/.codebuddy-plugin/marketplace.json` | `name`、`plugins[].{name,version,source}`、插件数量 | 29 / 206 / 5 / **3** / 350 / 1；my-experts 指纹 `e5c3984b0016` | 各自 `fp` 不等，或清单增删 |
 | 7 | `marketplaces/` 一级目录集合 | 目录名集合 | 7 个（含 `plugin-data`） | 新增/删除目录；或 `plugin-data` 突然出现清单 |
@@ -131,12 +136,24 @@ marketplace_dirs_fp=（脚本未实现该指纹，仅核对 7 个目录名）  s
 
 > **✅ 脚本 `BASELINE` 已同步（H6，2026-11-07 23:42 部署）**：文档基线与脚本常量现已一致，首跑实测「无变更（基线一致，最后核验 2026-11-07）」。上表 5 项即本次刷新的对象，成因全部来自用户已批准的改动（anysearch 改匿名 / 专家团升 1.6.0 并新增 `neko-sandbox` / 新建两个朝议专家团 1→3 插件 / 安装 security-audit 68→69），**不是异常漂移**。刷新过程与独立复审结论见 `security-refresh-notes.md` §10 变更记录（H6 行）。
 >
+> **2026-11-17 本机复跑记录（仓库那份脚本，未联网）**：报「有变更（10 项）」——
+> 3 项是指纹变化（`mcp.workbuddy` 7d7adece4903 → de986b4d4759、`settings.workbuddy` 02fb107c4263 → 797ab575a7bc、
+> 一个 marketplace 清单 fp 36af02a124f3 → f1b1e85e0f8f），7 项是 `~/.hindsight/coding-agents/dist` 整个目录已不存在，
+> 里面 7 个 hook 脚本全部报缺失。**这 10 项都是未登记的漂移，不是谁批准的改动**，所以本轮不刷 `BASELINE`。
+> 要不要按新机重算基线，请 云玩家 拍板；在那之前，本表所有旧指纹仍是「上一次批准的状态」。
+>
 > **刷新未制造静默区**：独立复审用 6 例内存漂移注入逐项验证（含 `my-experts.plugins` 计数单独变化），6/6 均正常报警；5 个参与指纹的文件密钥模式扫描 0 命中，未将任何凭据洗白进基线。
 
 > `settings.codebuddy=684c0eef3067` 即 **`~/.codebuddy/settings.json` 的 hook 集合指纹**（`hooks` + `enabledPlugins` 受控字段），与 `settings.workbuddy=02fb107c4263` 共同构成 §2 #4/#5 的双根检测。两者 2026-11-06 重新实算均与 `BASELINE` 一致，本版补录已刷新 `settings.workbuddy`（挂载自指所致）并新增 `backups.*` 两项，其余指纹值不变。
 
 刷新方式（**只读打印，不写文件**）：
 ```bash
-python "~/.workbuddy/plugins/marketplaces/my-experts/plugins/neko-plugin-ops/scripts/session_capability_refresh.py" --regen
+python scripts/session_capability_refresh.py --regen   # 在仓库根目录跑仓库那一份
 ```
-拿到新值后须**原子同步三处**：本文件 §1 表格 / §2 清单 / §4 指纹块、`session-refresh-sop.md` 的相关基线描述、脚本 `BASELINE` 常量；并同步刷新「基线版本」与「核验日期」。**有差异才改文件，无差异只报「基线一致，最后核验 2026-11-06」**。
+刷新命令只认**仓库那一份**脚本。同一份代码在本机有三处副本（仓库、`~/.workbuddy/hooks/` 挂载态、
+marketplace 安装态），2026-11-17 实测三个 sha256 前 12 位互不相同：仓库 `ad195c115825`、
+挂载态 `8c477c207986`、安装态 `b6d35cf2ff40`。会话里真跑的是挂载态那一版，它比仓库旧 8 小时，
+安装态比仓库旧 10 天。改完脚本要用 `install_sync.py --apply` 同步，别拿安装态的输出口吻当结论。
+
+拿到新值后须**原子同步三处**：本文件 §1 表格 / §2 清单 / §4 指纹块、`session-refresh-sop.md` 的相关基线描述、脚本 `BASELINE` 常量；并同步刷新「基线版本」与「核验日期」。**有差异才改文件；无差异时报「无变更（基线一致，最后核验 <BASELINE_DATE>）」**——
+日期取脚本常量 `BASELINE_DATE`（现值 2026-11-07），别在文档里另写一个日期。

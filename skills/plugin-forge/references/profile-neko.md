@@ -9,9 +9,17 @@ gh api repos/Project-N-E-K-O/N.E.K.O/contents/scripts/custom_channels/neko_chann
 - 返回 sha → NekoClaw 重写切换点（issue #3683 的 PR3）尚未进 main，§3/§7 契约仍有效；
 - 返回 404 → 切换点已进 main：§3/§7 视为**过期**，先按新 main 重核再用，重核不了的标 [未核验]；
 - 本机宿主版本已含切换点 → 同 404 处理。
-- **最近一次全量重核：2026-11-17，上游 main `db81c1be0fc18259b651ec9902c4d3ef8e5e52ac`**。`python scripts/profile_drift.py --strict` 在这一个 sha 上报「锚点 71 条、漂移 0、核不了 0、取不到 0」，CI 里这一步已经改成阻塞。路由表、装饰器、`settings.py` 常量、`schema.py` 字段、市场桥分段、`generator.py` 的 release 模板、内置插件计数（11 个，只有 `web_search` 的 `auto_start` 为 true）都在这一次逐条读过上原文。当天上游又前进一次（`e14f61963`），同一命令在新 head 上复跑仍是「71 条、漂移 0」。
-改口的判据是硬的：一行里探针能看到的每个锚点都在当前 main 上命中，才把那行的 `读于` 换成新 sha。按这条判据本轮改了 30 行。还留 `acfbdbc50` 的只有三行锚点标记（第 68、75、148 行），因为探针在那几行看不到任何锚点；另两处出现是历史叙述本身（第 15、27 行），不动。
-**探针看不见、本轮也没逐条重读语义的那几组**：§7.1 的 147、149、157、164（只有函数名没有行号），第 85 行的四个活动字段，第 101 行的常量块名，第 178 行的 docs 清单，以及 61-65 与 68-72 那两处「行号对上了但没重读语义」。引用这几组之前先按上一条规则重核。
+- **最近一次全量重核：2026-11-17**。上游 main 先取 `db81c1be0fc18259b651ec9902c4d3ef8e5e52ac`，当天又前进一次，
+  最终口径在同一命令下于 `e14f6196395a346ff422e0eb852c5eae3befc1cf` 复跑取得。
+  `python scripts/profile_drift.py --strict` 现在一次核对两份文档（本文件与 `skills/neko-plugin-sandbox/SKILL.md`），
+  在 `e14f61963` 上报「锚点 123 条（本文件 103、SKILL.md 20）、漂移 0、核不了 0、取不到 0、写法核不了 0」，
+  CI 里这一步阻塞。**这几个数随文档变，别抄进新结论，跑一次命令自己取。**
+改口的判据是硬的：一行里探针能看到的每个锚点都在当前 main 上命中，才把那行的 `读于` 换成新 sha。
+按这条判据本轮逐行改口，改动清单记在 AUDIT.md 的 2026-11-17 条目。现在没有任何锚点还标 `acfbdbc50`，
+那个 sha 只剩本文的历史叙述（上一条与「上一次核验」那条）提到。
+**探针现在仍看不见的一处**：§9 市场那行只列 `docs/plugins/` 的文件名，不带行号，也没有符号锚点。
+引用它之前先按上一条规则重核。以前这里列过一组「行号对上了但没重读语义」的行，
+那句话探针证明不了，本轮起不再写。
 - **上一次核验：2026-11-14 复跑本命令返回 404**。#3705 于当天把切换点合入 main，删除了 `scripts/custom_channels/neko_channel.py`，该目录已空。按上一条规则，§3/§7 本应按过期面处理，但 **2026-11-15 已对本轮触及的锚点对 main `acfbdbc50` 逐条重核**（各 `[FACT]` 标该 sha）；未标 sha 或标 `[未核验]` 的仍按上一条规则先重核再引用。
 - 更早的核验记录：2026-11-11（sha 85ea534）当时判为有效。**历史记录不是时效证明。**
 - 同日的市场兼容快照（逐行证据与 commit SHA 在 neko-plugin-workshop `market-corpus/compat-v2/`，见 <https://github.com/fengdiehualian/neko-plugin-workshop> PR#5。注意：PR#5 于 2026-11-16 核对为「已关闭、未合并」，该目录只在那条分支上，main 里没有。引用前先确认它可得，不可得就重跑三步）：144 个在架插件三态标注，现在就坏 1、将坏 0、有兜底会降级 1、仅文档/测试面 4、待核 11、兼容 127。这组数随市场变，引用前按快照的 scan_date 重跑三步。
@@ -48,7 +56,7 @@ gh api repos/Project-N-E-K-O/N.E.K.O/contents/scripts/custom_channels/neko_chann
 - `[plugin.host]` 已移除，写了直接报错 `[FACT] plugin/config/schema.py: format_removed_plugin_host import（18）、reject_removed_host_config（233-235）、顶层 host 键 ConfigValidationError（442-446，读于 db81c1be0，2026-11-17）`。
 - `id` 的宿主与 CLI 硬校验是 `^[A-Za-z0-9_-]+$`（`[FACT] plugin/config/schema.py: PluginSectionSchema.id 的 Field pattern（212）与 plugin/neko_plugin_cli/commands/validate_cmd.py: _require_string [plugin].id（189），读于 db81c1be0，2026-11-17`）；脚手架另收 Python 标识符式 `^[A-Za-z_][A-Za-z0-9_]*$`（`[FACT] plugin/neko_plugin_cli/templates/generator.py: _PYTHON_PLUGIN_ID_RE（19，读于 db81c1be0，2026-11-17）`），新插件按严的来；
   `entry` 形如 `模块路径:类名`（模块 `[A-Za-z_][A-Za-z0-9_]*(\.[...])*`、类名 `[A-Za-z_][A-Za-z0-9_]*`）
-  `[FACT] plugin/neko_plugin_cli/commands/validate_cmd.py: _require_string 处 [plugin].entry 的 pattern（192）与 _check_entry_target（def 在 921）内 module / class 两处 re.fullmatch（936、939，读于 db81c1be0，2026-11-17；旧记 181、760、763 处命中的不是这三条正则。宿主 schema.py:214 的 entry pattern 更宽（^[a-zA-Z0-9_.]+:[a-zA-Z0-9_]+$），发布以 CLI 校验为准）`。
+  `[FACT] plugin/neko_plugin_cli/commands/validate_cmd.py: _require_string 处 [plugin].entry 的 pattern（192）与 _check_entry_target（def 在 921）内 module / class 两处 re.fullmatch（936、939，读于 db81c1be0，2026-11-17；旧记 181、760、763 处命中的不是这三条正则。宿主 `plugin/config/schema.py:214` 的 entry pattern 更宽（^[a-zA-Z0-9_.]+:[a-zA-Z0-9_]+$），发布以 CLI 校验为准）`。
 - `[plugin.sdk]` 兼容区间字段 `recommended` / `supported` 存在（可为空）`[FACT] plugin/config/schema.py: PluginSdkSchema.recommended / supported（71-72）与 PluginDependencySchema 同名字段（195-196），读于 db81c1be0，2026-11-17`（`plugin/sdk` 兼容区间字段；GUIDE 已删除，旧锚全部作废）。
 - `[plugin_runtime]` 节：`enabled` / `auto_start`（**默认 `False`**）/ `timeout`（必须 `0 < t <= 300`）；
   写成字符串布尔会被判为问题 `[FACT] plugin/config/schema.py: PluginRuntimeSchema（264-282 读于 db81c1be0，2026-11-17；另有 priority、startup_failure 两字段，timeout 上限常量 _PLUGIN_RUNTIME_TIMEOUT_MAX = 300.0 在 :22）`、`plugin/config/plugin_toml_semantics.py:136-150（runtime_section 那段，读于 db81c1be0，2026-11-17）`。
@@ -68,7 +76,7 @@ gh api repos/Project-N-E-K-O/N.E.K.O/contents/scripts/custom_channels/neko_chann
   `[FACT] plugin/sdk/plugin/decorators.py: on_event 与 plugin_entry 签名的 kind 默认 "action"、custom_event 签名的 kind 默认 "custom"。这三处都是 `kind: EntryKind` 那一行，行号 64、95、182，读于 e14f61963，2026-11-17；`_PluginDecorators` 另有私有镜像，行号 263、302、391，纯 grep 会多命中）`。
 - 所有入口、生命周期、定时器、消息处理器**必须 `async def`**。
 - 一律从 `plugin.sdk.plugin` 导入；**`plugin.sdk.shared` 是内部实现细节，不应直接导入**（这句的出处是下一行引的 sdk 根 docstring；SKILL.md 只禁「新增」shared 导入，口径更窄）
-  `[FACT] plugin/sdk/__init__.py:9-10（docstring 原文：shared 是 internal implementation detail、should NOT be imported directly by plugin developers）；.agent/skills/neko-plugin/SKILL.md:18（Prefer public SDK facades 那句，69 同文档）、docs/plugins/sdk-reference.md:29（supported developer import surface 那句）口径较窄，前者只禁「新增」shared 导入，后者只谈受支持导入面（均读于 db81c1be0，2026-11-17；旧 plugin/PLUGIN_DEVELOPMENT_GUIDE.md 已从 main 删除，全 profile 的 GUIDE: 速记失效）`（`plugin/sdk/shared/__init__.py` 1-5 行自述为 lower-level primitives，部分仍在演进；行号读于 db81c1be0，2026-11-17）。
+  `[FACT] plugin/sdk/__init__.py:9-10（docstring 原文：shared 是 internal implementation detail、should NOT be imported directly by plugin developers）；.agent/skills/neko-plugin/SKILL.md:18（Prefer public SDK facades 那句，69 同文档）、docs/plugins/sdk-reference.md:29（supported developer import surface 那句）口径较窄，前者只禁「新增」shared 导入，后者只谈受支持导入面（均读于 db81c1be0，2026-11-17；旧 plugin/PLUGIN_DEVELOPMENT_GUIDE.md 已从 main 删除，全 profile 的 GUIDE: 速记失效）`（`plugin/sdk/shared/__init__.py` 的 docstring 在第 3 行自述 `shared` 是 lower-level primitives，部分子包仍在演进；行号读于 db81c1be0，2026-11-17）。
 - ctx 侧：`push_message` `[FACT] plugin/core/context.py: push_message`（1050 行，pinned db81c1be0，2026-11-17 实读；部分 v1 参数上游已标 deprecated）、`push_message_async` `[FACT] plugin/core/context.py: push_message_async`（1509 行，读于 db81c1be0，2026-11-17；只是 `asyncio.to_thread` 包同步 `push_message`，不做参数翻译）、
   `export_push` / `export_push_async` 共支持 **五类** `export_type`：`text` / `json` / `url` / `binary` / `binary_url`，其余值抛 `ValueError`；`export_push_{text,binary,url,binary_url}` 各有 普通 / `_async` / `_sync` 三个包装，**`json` 没有包装**，只能 `export_push(export_type="json", json_data=...)`（要显式异步就同参换 `export_push_async`；包装只覆盖 text/binary/url/binary_url 四类）；内联 `binary` 受 `EXPORT_INLINE_BINARY_MAX_BYTES` 限制 `[FACT] plugin/core/context.py: _export_push_async 的 export_type 分支（737-756 行，pinned db81c1be0，2026-11-17 实读）`；
   `run_id` 只有经 `/runs` 执行的入口才自动拿到：宿主从 `args._ctx["run_id"]` 注入运行域（`plugin/core/entry_executor.py: _run_scope(host_context.get("run_id"))`，130 行，读于 db81c1be0，2026-11-17）。**需要** `run_id` 的只有 `ctx.export_push*` 与 run 状态/进度类（`run_update*` / `run_progress*`）：它们走 `require_run_id`，在 `/runs` 之外调用又没显式传 `run_id=` 才抛 `RuntimeError`；`push_message` / `push_message_async` **不需要** `run_id` `[FACT] plugin/core/context.py: require_run_id（637-641）、_export_push_async def 710 与调用 727、_run_update_async def 869 与调用 882；均读于 db81c1be0，2026-11-17`。
@@ -85,10 +93,15 @@ gh api repos/Project-N-E-K-O/N.E.K.O/contents/scripts/custom_channels/neko_chann
   模型调用（`ctx.models`，`plugin/core/context.py: models（属性 def 在 314 行，读于 db81c1be0，2026-11-17）`；HTTP 面 `POST /chat/completions`、`GET /usage`、`GET /slots`）、
   store/配置、`data_path`/`cache_path`、Hosted TSX 面板、HTML 卡片、跨插件调用、i18n、
   定时 / 生命周期 / 消息 / 自定义事件 / 入口拦截链 / 快捷操作（见 §3 装饰器全集）。
+  `[FACT] 这六类各有对应装饰器（读于 e14f61963，2026-11-17；一条一个符号，免得探针只比前六个）：`
+  plugin/sdk/plugin/decorators.py: `timer_interval` 的 def 在 156 行、`lifecycle` 在 127 行、
+  `message` 在 137 行、`custom_event` 在 175 行、`before_entry` 在 210 行、`quick_action` 在 246 行。
+  入口拦截链那一组的四个装饰器（`after_entry`、`around_entry`、`replace_entry` 与 `before_entry`）
+  逐个记在 §3，锚点同为这个文件。
 - **只读 OS 活动快照** `[FACT] plugin/sdk/plugin/activity.py: get_os_activity_snapshot 定义与 OsActivitySnapshot`：`await get_os_activity_snapshot(source="<插件 id>")` →（**`async def`，必须 await；`source` 必填**）
   `OsActivitySnapshot(os_signals_available, foreground_category, system_idle_seconds, privacy_state)`，
   `privacy_state ∈ visible|private|unavailable`。**拉取式，且只有这四个字段。**
-- **明确不支持** `[FACT]`：Avatar 表情 / 动作 API、情绪修改 API、`[plugin.host]`；插件包 `type` 无 `extension`（上游 `.agent/skills/neko-plugin/SKILL.md:18` 仍把 `plugin.sdk.extension` 列为公共门面、:27 还把 extension 当包类型，但 db81c1be0 的 `plugin/sdk/` 下没有 extension（仅 `__init__.py`、adapter、hosted-ui、plugin、shared），`plugin/sdk/__init__.py` 的 docstring（5-7 行）只列 plugin 与 adapter、`__getattr__`/`__dir__`（36-47 行）也只放行这两个（行号读于 db81c1be0，2026-11-17）——那两行 SKILL.md 是过时文档，照它 import 会 ModuleNotFoundError）；
+- **明确不支持** `[FACT]`：Avatar 表情 / 动作 API、情绪修改 API、`[plugin.host]`；插件包 `type` 无 `extension`（上游 `.agent/skills/neko-plugin/SKILL.md:18` 仍把 `plugin.sdk.extension` 列为公共门面、:27 还把 extension 当包类型，但 db81c1be0 的 `plugin/sdk/` 下没有 extension（仅 `__init__.py`、adapter、hosted-ui、plugin、shared），`plugin/sdk/__init__.py` 的 docstring 在第 6、7 行只列 plugin 与 adapter、`__getattr__`/`__dir__`（36-47 行）也只放行这两个（行号读于 db81c1be0，2026-11-17）——那两行 SKILL.md 是过时文档，照它 import 会 ModuleNotFoundError）；
   在 `plugin/sdk` 全树 grep `avatar|emotion|petting|mouse|pointer` **零命中** →
   **没有桌面鼠标/触摸事件推送**，插件拿不到"摸头"这类宿主交互事件，只能读上面的快照。
 - 降级路径：表情/交互诉求 → HTML 卡片或视图表达；"用户在不在、在忙什么" → `get_os_activity_snapshot`
@@ -104,9 +117,9 @@ gh api repos/Project-N-E-K-O/N.E.K.O/contents/scripts/custom_channels/neko_chann
   插件侧与宿主 ingest 共用同一常量（防止限制漂移）`[FACT] plugin/settings.py: MESSAGE_PLANE_PAYLOAD_MAX_BYTES 常量块`。大图先 `ctx.images.upload` 换 URL part。
 - **持久数据一律写 `data_path` / 缓存写 `cache_path`** `[FACT] docs/plugins/sdk-reference.md 持久数据表（78-79）与 data_path / cache_path 两节（134、143，读于 db81c1be0，2026-11-17；GUIDE 已删除；本节其余锚点未标 sha，按文首基线声明沿旧基线）`；
   `self.plugin_dir` 是随包安装目录（代码 / manifest / 静态资源）`[FACT] plugin/sdk/plugin/base.py: plugin_dir 定义（118-121，读于 db81c1be0，2026-11-17；同文件 123-126 的 config_dir 上游自述是 plugin_dir 的兼容别名，不是第四个目录，别往里写）`、`docs/plugins/sdk-reference.md:48`（plugin_dir 那行表格；GUIDE 已删除，旧锚作废），
-  **不是可写区**。（`plugin_dir` 的强制只读由本机蒸馏文档 `neko-plugin-dev/reference/sdk-core.md:20、40` 断言，
+  **不是可写区**。（`plugin_dir` 的强制只读由本机蒸馏文档 `neko-plugin-dev/reference/sdk-core.md` 第 20 行与第 40 行断言，
   本轮未在上游逐行核到拦截点 → 该"强制层"记 `[未核验]`；但"往安装目录写"一律按平台约定封驳。）
-- **Windows 数据根取 `LOCALAPPDATA`**（不是 `HOME` / `USERPROFILE`）`[FACT] utils/config_manager/storage_roots.py: _get_standard_data_directory_candidates（367-374）`。
+- **Windows 数据根取 `LOCALAPPDATA`**（不是 `HOME` / `USERPROFILE`）`[FACT] utils/config_manager/storage_roots.py: _get_standard_data_directory_candidates（def 367，win32 分支 370 到 373，函数体到 381；读于 e14f61963，2026-11-17）`。
 - 用户插件执行根可被 `PLUGIN_CONFIG_ROOT` 覆盖（**宿主已标 legacy**：环境变量仍生效，新代码用 `PLUGIN_CONFIG_ROOTS` / `USER_PLUGIN_CONFIG_ROOT`；`plugin.settings` 的同名属性已废弃并返回内置根），否则 `<数据根>/N.E.K.O/.neko-plugin-installations/plugins`；内置根 = 仓库 `plugin/plugins`
   `[FACT] plugin/settings.py 的 `get_builtin_plugin_config_root`:69-71 与 `get_user_plugin_exec_root`:102-118，读于 db81c1be0，2026-11-17`。用户配置在 `<数据根>/plugins/<id>/config/plugin.toml`。
 - **插件启动超时 `NEKO_PLUGIN_STARTUP_TIMEOUT` 默认 `10.0` 秒，>300 直接 `ValueError`** `[FACT] plugin/settings.py:314-315（PLUGIN_STARTUP_TIMEOUT）、766-769（>300 的 raise 在 768-769，读于 db81c1be0，2026-11-17）`。
@@ -194,9 +207,9 @@ gh api repos/Project-N-E-K-O/N.E.K.O/contents/scripts/custom_channels/neko_chann
 6. 把"没 autostart"归因于目录名或环境变量（真因在 §7 那条判定链，尤其 `auto_start` 默认 false 与待审批集合）
 7. 拿 `GET /runs` 或裸 `/messages` 探活（405 / 404，正确路由见 §7）
 8. 往安装目录写文件 / 改写宿主配置（含"插件自注册"）—— 违反 §6
-9. 调用不存在的 CLI 动词（`run` / `release` / `deps` / `validate`）
+9. 调用不存在的 CLI 动词（`run` / `release` / `deps` / `validate`）—— `[FACT] plugin/neko_plugin_cli/cli.py:105` 起是那 9 个 `*_cmd.register` 调用，里面没有这四个动词，读于 e14f61963，2026-11-17`
 10. 入口的 `description` / `input_schema` 脱离对话历史就填不对；或入口被中途取消后留半态、被重复调用不安全（见 §3）
-11. Release job 的 `permissions:` 缺 `id-token: write` / `attestations: write` → 每次 tag 的 Release job 直接 `startup_failure`（1 秒即挂，无步骤日志）。判定 = Release run 1s 内 startup_failure 且无步骤日志。先查再生效：模板 `plugin-market-actions-v1` 的 `render_release_workflow` 在 main（`generator.py:859-871`，`def render_release_workflow` 在 859，三项 permissions 在 869-871）与本 profile 钉的两个基线上都已写全 `contents` + `id-token` + `attestations` 三项，所以新生成的 `release.yml` 不该缺；缺的是改名前旧模板产出的历史文件。修法：只给自己仓库那份 caller 补齐三项，别改上游。
+11. Release job 的 `permissions:` 缺 `id-token: write` / `attestations: write` → 每次 tag 的 Release job 直接 `startup_failure`（1 秒即挂，无步骤日志）。判定 = Release run 1s 内 startup_failure 且无步骤日志。先查再生效：模板 `plugin-market-actions-v1` 的 `render_release_workflow` 在 main（`plugin/neko_plugin_cli/templates/generator.py:859-871`，`def render_release_workflow` 在 859，三项 permissions 在 869-871）与本 profile 钉的两个基线上都已写全 `contents` + `id-token` + `attestations` 三项，所以新生成的 `release.yml` 不该缺；缺的是改名前旧模板产出的历史文件。修法：只给自己仓库那份 caller 补齐三项，别改上游。
 12. 缺 `.vscode/settings.json` / `tasks.json`：Market 的 Release check（`neko-plugin check -r`）硬性要求这两个文件存在且为合法 JSON，缺失即阻断发布；Verify 流程先挂 Ruff 时该错误从不暴露（步骤顺序掩盖）。修法：`neko-plugin setup-repo <dir> --no-readme --no-tests --no-gitignore` 只生成支持文件；入库前把 `nekoPlugin.repoRoot` 的本机绝对路径改为空串（公开仓不带机器路径）。
 
 ## 10. 复核记录

@@ -101,7 +101,8 @@
 4. **就绪检查**：核对 8 个 hook 脚本存在性；任一缺失即记入差异（启动失败风险）。
 5. **生成当前快照**：MCP 启用/禁用清单、连接器目录项数、生效配置 hooks 事件/命令数、marketplace 目录与清单数、插件版本、skills 数、hook 脚本就绪数。
 6. **判定有无差异**：按 §3 规则。
-7. **输出上下文**：`continue:true` + `additionalContext`，内容按 §3 的幂等输出约定（无差异只报一句话 + 快照，不写文件）；措辞须符合 §1.2-d 的客观、无指令要求。
+7. **输出上下文**：`continue:true` + `additionalContext`，内容按 §3 的幂等输出约定（无差异只报一句话 + 快照，不写文件）。
+   输出形态只有 `hookSpecificOutput.additionalContext`：脚本不写 `continue` 字段，宿主自己决定放行（2026-11-17 读 `emit()` 核对）；措辞须符合 §1.2-d 的客观、无指令要求。
 8. **会话内补齐（非 hook 阶段、MCP 就绪后）**：若需连接器运行时状态，显式调用 `list_installed_plugins`；若需远程版本，须用户确认后联网。此步**不属于**自动 hook（e）。
 9. **决策**：有差异时由主理人确认是否更新基线（§4）；**绝不**触发安装/升级动作（§0A）。
 
@@ -122,10 +123,10 @@
 
 | 结果 | 允许的输出 | 是否允许改文件 |
 |---|---|---|
-| **无差异** | **只报「基线一致，最后核验 2026-11-06」**（配套脚本机器侧结论为「无变更」，两者是同一状态的两层表述），可附简短当前快照与证据声明 | **否**。不写任何文件、不刷新时间戳、不追加历史记录、不生成「本次已检查」标记 |
+| **无差异** | **只报「无变更（基线一致，最后核验 <BASELINE_DATE>）」**（配套脚本机器侧结论为「无变更」，两者是同一状态的两层表述），可附简短当前快照与证据声明 | **否**。不写任何文件、不刷新时间戳、不追加历史记录、不生成「本次已检查」标记 |
 | **有差异** | 报「有变更（N 项）」+ 差异明细（最多 20 条，超出注明另有 M 项）+ 当前快照 + 证据声明 + 「请由主理人确认后更新」 | **否**（hook 阶段）；由主理人在会话内确认后按 §4 落盘 |
 
-> 「最后核验 YYYY-MM-DD」取 `capability-baseline.md` 的核验日期，当前为 **2026-11-06**；每次真正落盘更新基线时同步刷新该日期。无差异时**不得**把日期改成当天 —— 那会造成「每次会话都改文件」，直接违反幂等。
+> 「最后核验 YYYY-MM-DD」取脚本常量 `BASELINE_DATE`（现值 **2026-11-07**），与 `capability-baseline.md` 的核验日期同值；每次真正落盘更新基线时同步刷新该日期。无差异时**不得**把日期改成当天 —— 那会造成「每次会话都改文件」，直接违反幂等。
 
 ## 4. 变更后写到哪里（落盘决策矩阵）
 
@@ -159,7 +160,7 @@
 
 1. **框架层**：官方通用 `Blocking error` 条目自带 "On events that can block" 限定，与 §1.2-a 的 per-event 例外表**不构成冲突**——通用表格列 `exit 0` 成功 / `exit 1` 非阻塞警告 / `exit 2` 阻塞（仅适用于 `#### Exit code 2 behavior per event` 表中 `Can block? = Yes` 的事件）；按 §1.2-a，**`SessionStart` 在该表为 `Can block? = No`，`exit 2` 仅把 stderr 显示给用户、不阻塞会话**（"Claude doesn't see it, and the session or subagent proceeds"）。若脚本进程无法启动或超过宿主 `timeout`，会话仍继续。
 2. **脚本层（工程纪律）**：所有可预期异常（文件缺失、JSON 解析失败、stdin 非法 JSON、内部软截止）均在脚本内捕获，输出**合法 `HookOutput` JSON + 降级提示 + `exit 0`**。选 exit 0 而非 1 的理由：`exit 1` 会丢弃 stdout（`exit 1` 时 stderr 显示为警告、stdout 忽略），降级提示只能进 stderr；`exit 0` 能让「检测失败、请手动复核」通过 `additionalContext` 进入上下文。统一 exit 0 是纪律要求，**不是**因为 exit 2 会阻塞会话（§1.2-a 已否定该前提）。
-3. **超时层**：宿主 `timeout: 10`；脚本内置 **`SOFT_DEADLINE = monotonic() + 8.0s`**（`session_capability_refresh.py:36`），到点抛 `TimeoutError` 被捕获，输出固定单行降级文本 `FALLBACK_CONTEXT`，**不输出部分结果**（与脚本头「超时安全」那句同一口径），留 2 秒余量给 JSON 序列化与进程退出。
+3. **超时层**：宿主 `timeout: 10`；脚本内置 **`SOFT_DEADLINE = monotonic() + 8.0s`**（`scripts/session_capability_refresh.py:39`），到点抛 `TimeoutError` 被捕获，输出固定单行降级文本 `FALLBACK_CONTEXT`，**不输出部分结果**（与脚本头「超时安全」那句同一口径），留 2 秒余量给 JSON 序列化与进程退出。
 4. **降级文本同样受 §1.2-d 约束**：客观陈述、不夹带指令、不诱导越权。
 
 > 已实测：正常 stdin / 空 stdin / 非法 JSON stdin 三路径均输出合法 JSON、`continue:true`、`exit 0`。
@@ -180,7 +181,7 @@
 
 ## 8. 挂载状态与用户同意（当前：不挂载）
 
-- **当前状态：未挂载任何新增 SessionStart hook**；`~/.workbuddy/settings.json` 保持原样（现有 2 条 SessionStart 是既有 hindsight / haloflux-lab 配置，与本工程无关，未改动），`~/.codebuddy/settings.json` 亦保持原样（其 3 条 `codebuddy-*` hook 是宿主既有配置，见 §1.4，**当前未被代码级审计覆盖，属已知缺口**）。本次工程只落盘文档与刷新脚本常量，**未修改任何 settings.json**。
+- **当前状态（2026-11-17 实测：已挂载）**：`~/.workbuddy/settings.json` 的 `hooks.SessionStart` 共 3 条 —— 两条既有配置（hindsight、haloflux-lab）与本工程的检测脚本 `~/.workbuddy/hooks/session_capability_refresh.py`（timeout 10）。这次挂载早于下面那些同意条款落笔，是否要追认由 云玩家 定；本文以前写的是「未挂载任何新增 SessionStart hook」，那是部署前的旧状态，`~/.codebuddy/settings.json` 亦保持原样（其 3 条 `codebuddy-*` hook 是宿主既有配置，见 §1.4，**当前未被代码级审计覆盖，属已知缺口**）。本次工程只落盘文档与刷新脚本常量，**未修改任何 settings.json**。
 - 用户长期规则：循环 / 自动行为须先查官方文档并取得同意。已完成前置：官方文档 WebFetch 核验 + 云安事件专项语义核验（§1.2）。
 - **启用自动化需用户单独、显式同意**，至少明确以下 6 点：
   1. 是否同意在 `~/.workbuddy/settings.json`（**推断生效根**，勿挂到 `~/.codebuddy/settings.json`）新增一条 SessionStart hook；
@@ -189,7 +190,7 @@
   4. 是否同意「有差异时由主理人在会话内更新三处基线文件」，hook 本身永不写文件；
   5. 是否同意联网核验项纳入「完整更新」；若需要，须**额外**授权联网行为；
   6. 是否知悉**不得写入 `~/.codebuddy/settings.json`**（该根已有 3 条 `codebuddy-*` 自动执行 hook，会形成第二套自动执行注册；两配置根属不同产品，**不构成官方 dedup 的「跨 settings 层级同一 handler」，不可假设只跑一次**；与云安 `security-refresh-notes.md` §6 / §7 红线 3 一致）。
-- **未获同意时的等价降级**：由主理人在每次会话开始时手动按 §2 清单逐项复核（清单可直接照抄执行），无差异只报「基线一致，最后核验 2026-11-06」。机制上仍是「完整更新」，只是不自动化。
+- **未获同意时的等价降级**：由主理人在每次会话开始时手动按 §2 清单逐项复核（清单可直接照抄执行），无差异只报「基线一致，最后核验 <BASELINE_DATE>」。机制上仍是「完整更新」，只是不自动化。
 - 特别注意 §1.2-e：即便挂载，hook 阶段也**拿不到 MCP**，所以连接器状态、远端版本永远需要会话内补齐，自动化不能覆盖这部分。
 
 ## 9. 挂载前检查清单 / 回滚 Runbook（**当前不执行**，仅供用户同意后使用）
@@ -238,7 +239,7 @@ cp "~/.workbuddy/settings.json.pre-neko-baseline-hook.bak" "~/.workbuddy/setting
 
 | 黄金信号 | 指标 | 阈值 / 动作 |
 |---|---|---|
-| 延迟 | 检测脚本执行耗时 | 脚本内 `SOFT_DEADLINE = monotonic() + 8.0s`（`session_capability_refresh.py:36`）软截止；宿主 `hooks.timeout = 10s`，超时即视为降级，须检查磁盘/文件数 |
+| 延迟 | 检测脚本执行耗时 | 脚本内 `SOFT_DEADLINE = monotonic() + 8.0s`（`scripts/session_capability_refresh.py:39`）软截止；宿主 `hooks.timeout = 10s`，超时即视为降级，须检查磁盘/文件数 |
 | 错误 | 降级输出次数 | 连续 2 个新会话出现「本次检测不可用」这条降级文本 → 停止自动化并人工复核 |
 | 流量 | 每会话注入字节数 | 实测 `additionalContext` ≈ 1.1 KB；超过 4 KB 应精简快照，避免挤占上下文（且它是不可见 system-reminder，见 §1.2-d） |
 | 饱和度 | 误报率 | 无差异却连续报「有变更」→ 优先怀疑三处基线未原子同步（§4），或误用整文件 hash |

@@ -501,6 +501,76 @@ def _self_test():
         sys.argv = real_argv
         sys.stdin = real_stdin
 
+    # 6) collect_fingerprints 的扫描分支。以前自检把真扫描整个跳过了：
+    #    缺文件、坏 JSON、软截止、marketplace 计数这五条路一次都没跑过（终检 sweep 第 11 条）。
+    #    这里把五个路径常量指到临时夹具，跑真函数，跑完原样换回来。
+    sd = tempfile.mkdtemp(prefix="cap-scan-")
+    real_paths = (ROOT, CODEBUDDY, MKTS, NEKO, SOFT_DEADLINE)
+    try:
+        wb = os.path.join(sd, ".workbuddy")
+        cb = os.path.join(sd, ".codebuddy")
+        mkt = os.path.join(wb, "plugins", "marketplaces")
+
+        def _mk(path, text):
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(text)
+        _mk(os.path.join(wb, "mcp.json"), '{"mcpServers": {"a": {"command": "x", "env": {"K": "v"}}}}')
+        _mk(os.path.join(wb, "connectors", "default", "mcp.json"),
+            '{"mcpServers": {"a": {}, "b": {}}}')
+        _mk(os.path.join(wb, "settings.json"), '{"hooks": {"X": []}, "enabledPlugins": {}}')
+        _mk(os.path.join(cb, "settings.json"), '{"hooks": {}}')
+        _mk(os.path.join(mkt, "demo", ".codebuddy-plugin", "marketplace.json"),
+            '{"version": "1", "plugins": [{"id": "p1"}, {"id": "p2"}]}')
+        _mk(os.path.join(mkt, "demo", "plugins", "neko-plugin-ops", ".codebuddy-plugin",
+                         "plugin.json"), '{"name": "neko-plugin-ops", "version": "1"}')
+        os.makedirs(os.path.join(wb, "skills", "one"), exist_ok=True)
+        os.makedirs(os.path.join(wb, "skills", "two"), exist_ok=True)
+        _mk(os.path.join(wb, "x.hindsight-backup"), "{}")
+
+        globals()["ROOT"], globals()["CODEBUDDY"] = wb, cb
+        globals()["MKTS"], globals()["NEKO"] = mkt, os.path.join(mkt, "demo", "plugins", "neko-plugin-ops")
+        globals()["SOFT_DEADLINE"] = time.monotonic() + 30
+        cur, trunc, notes = collect_fingerprints()
+        chk("扫描: 有 mcp 指纹", len(cur["scalars"]["mcp.workbuddy"]) == 12)
+        chk("扫描: 缺文件记 <MISSING>", cur["scalars"]["mcp.skill.lexiang"] == "<MISSING>")
+        chk("扫描: 缺文件要进 notes", any("路径缺失" in x for x in notes))
+        chk("扫描: truncated 不该被触发", trunc is False)
+        chk("扫描: catalog 计数", cur["scalars"]["mcp.catalog.count"] == 2)
+        chk("扫描: marketplace 插件数", cur["marketplaces"]["demo"]["plugins"] == 2)
+        chk("扫描: marketplace 目录", cur["marketplace_dirs"] == ["demo"])
+        chk("扫描: skills 计数", cur["skills_count"] == 2)
+        chk("扫描: 备份计数", cur["scalars"]["backups.workbuddy"] == 1)
+        chk("扫描: 清单指纹", len(cur["scalars"]["plugin.neko-plugin-ops"]) == 12)
+
+        # 坏 JSON：解析失败要记 <UNREADABLE> 并留一条说明，不许抛出去。
+        # catalog 计数走另一个文件：它坏了要记 -1，也不能把整轮扫描带崩。
+        _mk(os.path.join(wb, "settings.json"), "{不是 JSON")
+        _mk(os.path.join(wb, "connectors", "default", "mcp.json"), "{也不是 JSON")
+        cur2, _t2, notes2 = collect_fingerprints()
+        chk("扫描: 坏 JSON 记 <UNREADABLE>", cur2["scalars"]["settings.workbuddy"] == "<UNREADABLE>")
+        chk("扫描: 坏 JSON 有说明", any("解析失败" in x for x in notes2))
+        chk("扫描: catalog 坏了记 -1", cur2["scalars"]["mcp.catalog.count"] == -1)
+        chk("扫描: 一处坏了不拦其余检测", len(cur2["scalars"]) == len(cur["scalars"]))
+
+        # 软截止：跳过剩余检测并标记 truncated，主路径靠这个标记走降级文本
+        globals()["SOFT_DEADLINE"] = time.monotonic() - 1
+        _t3, trunc3, notes3 = collect_fingerprints()
+        chk("扫描: 软截止标记 truncated", trunc3 is True)
+        chk("扫描: 软截止有说明", any("软截止" in x for x in notes3))
+
+        # 配置根整个不存在：backups 走 -1，不能抛
+        globals()["SOFT_DEADLINE"] = time.monotonic() + 30
+        globals()["CODEBUDDY"] = os.path.join(sd, "nope")
+        _t4, _t4b, notes4 = collect_fingerprints()
+        chk("扫描: CODEBUDDY 缺失时 backups 记 -1", _t4["scalars"]["backups.codebuddy"] == -1)
+    except OSError as e:
+        bad.append("扫描夹具没跑成：" + type(e).__name__)
+    finally:
+        (globals()["ROOT"], globals()["CODEBUDDY"], globals()["MKTS"],
+         globals()["NEKO"], globals()["SOFT_DEADLINE"]) = real_paths
+        shutil.rmtree(sd, ignore_errors=True)
+
     print("能力刷新自检 %d 项：%s" % (n[0], "全部通过" if not bad else "%d 项失败" % len(bad)))
     for m in bad:
         print("  FAIL:", m)
@@ -508,16 +578,23 @@ def _self_test():
 
 
 def main():
+    # 自检必须在下面那个大 try 之外：S10 的兜底是「hook 绝不能把会话拦住」，
+    # 但它也会把自检的异常吃成 exit 0——CI 那一步于是永远绿（终检 sweep 第 16 条）。
+    # 自检不是会话路径，它失败就是要红。
+    if "--self-test" in sys.argv:
+        try:
+            sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+            sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+        return _self_test()
     try:
         try:
             sys.stdout.reconfigure(encoding="utf-8", errors="replace")
             sys.stderr.reconfigure(encoding="utf-8", errors="replace")
         except Exception:
             pass
-        # --self-test 必须排在 stdin 读取之前：CI 里没人关 stdin，先读就挂住（同 --regen 的理由）。
-        if "--self-test" in sys.argv:
-            return _self_test()
-        # 维护模式必须先于 stdin 读取：--regen 常在交互式终端手动执行，
+        # --regen 也必须先于 stdin 读取：常在交互式终端手动执行，
         # 若先 sys.stdin.read() 会因等待 EOF 而挂起（宿主/终端未关闭 stdin）。
         if "--regen" in sys.argv:
             cur, _, _ = collect_fingerprints()

@@ -234,7 +234,8 @@ generate_roster_tables.py 的头两处少报了自己的写范围与模式清单
 
 作者要求先看清 `cmd_serve` 少写状态这件事，再谈往副仓搬。
 
-- 沙箱根 `C:/Users/54301/forge-sandbox-serve`。挂载既有 checkout `C:/Users/54301/neko_host`（HEAD `b20a9f8`）。
+- 沙箱根 `~/forge-sandbox-serve`。挂载既有 checkout `~/neko_host`（HEAD `b20a9f8`）。
+  本机绝对路径一律写成 `~`：这份文件会随插件分发，用户名也是信息（SEC-1 那条规矩同样管我们自己的文档）。
   跑前跑后那个 checkout 的 `git status` 都干净，沙箱没写它。解释器用那 checkout 自己的 `.venv`，没装新依赖。
 - `serve` 起来：uvicorn 在 127.0.0.1:43117 打 `Application startup complete`，`/health` 回 200。
   数据根落在沙箱内 `state/LocalAppData`。上游内置插件 11 个被扫到，只有 `web_search` 因 `auto_start = true` 进 running。
@@ -586,17 +587,21 @@ session_id / source / hook_event_name」。删掉解析就同时改了一条对�
 - 自检计数一律不抄：四个脚本各跑 `--self-test`，以实跑输出为准，本文件不钉数字。
   （旧版这里抄了 82 / 76 / 20 三个数，同文件另一处还留着更早的 75，两处互相打脸，
   而且原则就写在同一节里。2026-11-16 按 A571 第 6 条删掉钉死的数。）
-- 文档扫的新账：`--include-docs` 会把 `scripts/.drift-cache/` 里缓存的上游源码一起扫。
-  2026-11-15 实测 194 处 SEC-4 命中里 163 处来自那堆缓存文本。
-  所以「文档扫」那个分数现在量的是缓存，不是本仓文档。它是 CI 的 report-only 步骤，不阻塞。
-  待办：给扫描器加一条默认排除 `.drift-cache/` 的口径，或把缓存挪到仓库外。
+- 文档扫的新账（2026-11-15）：`--include-docs` 会把 `scripts/.drift-cache/` 里缓存的上游源码一起扫，
+  当时 194 处 SEC-4 命中里 163 处来自那堆缓存文本，分数量的是缓存不是本仓文档。
+  **2026-11-17 已修**：`.drift-cache` 进 `SKIP_DIRS` 默认排除，扫描器自检钉住这条（撤掉就变红）。
+  更正一句：那句话里「它是 CI 的 report-only 步骤」当时就不成立 —— `sync-check.yml` 从来没有过文档扫这一步，
+  `--include-docs` 只在手工命令里出现过。本轮复跑（默认排除缓存后）：`--include-docs` 仍不干净，
+  65 个文件里 SEC-1 6 / SEC-2 9 / SEC-3 12 / SEC-4 38，绝大多数是 AUDIT.md 与
+  security-checklist.md 里引用的**示例文本**。所以这一步还是不接进 CI：接了就是把分诊器当裁判，
+  而那 38 处要逐条人工判过才能豁免。缺口记在这里，不当已解决。
 
 ### 豁免复核（2026-11-14，对照已推送树 08e3c77 逐条核对）
 
 - 复跑命令（三条豁免，exit 0；得分以实跑为准）：`python skills/plugin-forge/scripts/security_audit.py . --allow skills/plugin-forge/scripts/security_audit.py,skills/neko-plugin-sandbox/scripts/sandbox.py,scripts/profile_drift.py`
 - 豁免 1 `skills/plugin-forge/scripts/security_audit.py`：**保留**。命中数随夹具变动，2026-11-15 实测以脚本为准；全部是文件头说明、检测规则自身的字面量与自检夹具。**夹具一律拆写**（`"-----BEGIN " + "RSA PRIVATE KEY-----"）：本文件会被自己扫，A472 抓到过我在新自检里写了两个完整的私钥头字面量，那会让不带 `--allow` 的自查直接把自己否决。
-- 豁免 2 `skills/neko-plugin-sandbox/scripts/sandbox.py`：**保留**。命中均为已声明功能（新增一条 URL 内嵌凭据在 `cmd_start` 的本地回环示例里）。杀进程面的读取函数是 `_pid_cmdline`（返回命令行与「进程还在不在」两个值），身份判定是 `pid_verdict`，走向判定是 `stop_action`，都由 `cmd_stop` 调用；它读 `/proc`、macOS 上没有 `/proc` 就退回 `ps -p <pid> -o command=`。读不到命令行而进程还在时拒杀，要调用方带 `--force` 再来一次；进程已不存在则直接清状态文件，不再要 `--force`。这是 2026-11-15 的改动（2026-11-16 按 A571 第 2 条补 macOS 兜底与存活分账，`should_kill` 由 `stop_action` 取代）；旧版在这里 fail-open，伪造 pid 照样被 taskkill。自检有 12 条 stop 判定组合，撤掉 `stop_action` 的 None 分支会报多条失败。本行原来写的是行号，已按「不写行号」的口径换成符号引用（2026-11-15，A472 第 7 条）。
-- 豁免 3 `scripts/profile_drift.py`：**新增**（2026-11-15）。3 处命中全在 `api()` 一个函数里：`import urllib.request`、`urllib.request.Request`、`urlopen`。用途＝只读拉取 `api.github.com/repos/Project-N-E-K-O/N.E.K.O` 的 commit 与 contents，用于锚点漂移探针；无写请求、无 exec、无落盘除 `scripts/.drift-cache/`（已 gitignore）之外的文件；带 GITHUB_TOKEN 时只作为 Authorization 头回给 api.github.com，不外发。边界：改成抓取非该仓库、或把响应内容当代码执行，本依据即刻失效。
+- 豁免 2 `skills/neko-plugin-sandbox/scripts/sandbox.py`：**保留**。2026-11-17 实跑 9 处：SEC-1 2 处（`_isolated_dirs` 与 `cmd_prepare` 的建目录路径）、SEC-2 3 处（自检夹具里的回环 URL 与口令示例）、SEC-4 4 处（uv/pip/git/urllib 外联点位，用途均已声明）。全部为已声明功能或自检夹具。杀进程面的读取函数是 `_pid_cmdline`（返回命令行与「进程还在不在」两个值），身份判定是 `pid_verdict`，走向判定是 `stop_action`，都由 `cmd_stop` 调用；它读 `/proc`、macOS 上没有 `/proc` 就退回 `ps -p <pid> -o command=`。读不到命令行而进程还在时拒杀，要调用方带 `--force` 再来一次；进程已不存在则直接清状态文件，不再要 `--force`。这是 2026-11-15 的改动（2026-11-16 按 A571 第 2 条补 macOS 兜底与存活分账，`should_kill` 由 `stop_action` 取代）；旧版在这里 fail-open，伪造 pid 照样被 taskkill。自检有 12 条 stop 判定组合，撤掉 `stop_action` 的 None 分支会报多条失败。本行原来写的是行号，已按「不写行号」的口径换成符号引用（2026-11-15，A472 第 7 条）。
+- 豁免 3 `scripts/profile_drift.py`：**保留**（2026-11-15 加）。2026-11-17 实跑 6 处，全在 `api()` 与 `api_bytes()`：`import urllib.request` / `Request` / `urlopen` 各两次（两个取数函数成对写）。以前记的「3 处」是加 `api_bytes()` 之前的数，行号与函数名都以实跑为准。用途＝只读拉取 `api.github.com/repos/Project-N-E-K-O/N.E.K.O` 的 commit 与 contents，用于锚点漂移探针；无写请求、无 exec、无落盘除 `scripts/.drift-cache/`（已 gitignore）之外的文件；带 GITHUB_TOKEN 时只作为 Authorization 头回给 api.github.com，不外发。边界：改成抓取非该仓库、或把响应内容当代码执行，本依据即刻失效。
 - 口径：文件数不要手抄。取法是 `--json` 的 `scanned_files` 与 `skipped_files`，豁免条数看 `.github/workflows/sync-check.yml` 的 `AUDIT_ALLOW`（2026-11-15 实测：扫描 15 个、跳过 84 个、三条豁免）。本行以前写 5 .py / 池 13 / 文档 48 / 减 2 得 11，四个数全过期：实跑是 6 个 .py、池 15、49 个 .md、减 3 得 12。
 - 本轮 8 项修复（2026-11-14）没有增删文件，但扫描器扩面后代码池为 13 个（加入无扩展名与 `.env*` 文件）。新增文字按 SEC-1 至 SEC-4 的模式表人工比对过，没有新触发词。扫描器本轮未重跑，上表的发现数沿用上次实测。
 - CI 状态：sync-check #1 已在 GitHub Actions 真实 runner 通过（08e3c77，9s，四步全绿）。
@@ -608,3 +613,70 @@ session_id / source / hook_event_name」。删掉解析就同时改了一条对�
 - 结果：SEC-1 1 处、SEC-2 / SEC-3 / SEC-4 各 0 处，总分 **95/100，放行**。SEC-5（不计分）本仓库 0 处。未扫描项数看 `--json` 的 `skipped_files`（2026-11-15 实测 84：49 个 .md 不在池内、29 个 .txt 缓存、4 个无扩展名、1 个 .llm、3 个豁免）——这些位置本次没有证据，不记为通过；完整清单看 `--json` 的 `skips` 字段。
 - SEC-1 命中：`scripts/session_capability_refresh.py:43` `CODEBUDDY = os.path.expanduser("~/.codebuddy")`，规则「指向敏感家目录」。**依据**：该脚本按设计只读单机 CLI 配置做能力快照，不写、不删、不外传，输出侧另行脱敏。上一版没报这一条，是因为 `ROOT` 的 `~` 从未展开、脚本恒报「路径缺失」，而该规则要匹配 `expanduser(`；把路径修对之后规则才第一次真的看见它。**边界**：只读性质一旦改变（新增写入、上传或把内容拼进请求），本依据即刻失效，须重新逐行复核。
 - 上一节的 100/100 保留，作为截断与扩展名过滤仍在时的历史值。
+
+## 2026-11-17 轮（外部校验 A734 与终检 sweep 的落地记录）
+
+一句话：这轮把「探针看不见的写法」和「自检跑不到的分支」两类缺口收掉，
+其余是文档与机器状态的真话。全部改动都有反向对照，脚本在仓库外（`~/forge-scratch/run_controls*.py`）。
+
+### 接进来的门禁
+
+- **漂移探针扩面**：默认一次核对两份文档（`profile-neko.md` 与沙箱 `SKILL.md`）。
+  新增判据「写法核不了」：行号前只写文件名或半截目录的锚点，直接阻塞。
+  这一条的来源就是本轮缺陷本身——`config/network.py` 的端口行号被我写错过一次，当时门禁看不见。
+  为什么不建裸文件名映射表：上游 5 个 `messages.py`、6 个 `query_service.py`，猜错会报「对得上」，比不检更坏。
+- **扫描器池子补齐**：`.html` 从文档池移进代码池（门禁早就是当受保护代码，扫描器却不读）；
+  两边同时补 `.vbs` `.ksh` `.mk`；`.drift-cache` 进 `SKIP_DIRS`。
+- **门禁认带后缀的构建文件**：`Dockerfile.dev`、`Makefile.am` 以前两边都不管。
+  反向用例钉住「`docs/notes.dockerfile` 仍算文档」，免得把讲 Dockerfile 的文章钉成代码。
+- **自检真跑退出码**：`session_capability_refresh.py` 的 `--self-test` 以前包在 S10 兜底 try 里，
+  脚本自己崩了也退 0。现在自检走那条 except 之外，红就是红。
+- **`_kill_pid` 加注入点**（`nt` / `kill` / `call` / `wait`）：ubuntu CI 第一次能跑满 Windows 腿、
+  SIGTERM/SIGKILL 与两处 `PermissionError` 共 8 组。
+- **探针自检覆盖 `resolve_head` 与 `main()`**：缓存新鲜、过期重取、取不到 sha、
+  以及 main 的 0/1/2 三种退出码（`main(argv=...)` 与 `resolve_head(cache_dir=, get=)` 就是为这个开的口）。
+
+### 文档改口的地方（都带日期与出处）
+
+- 沙箱 `SKILL.md`：契约表 10 格补齐符号名；`stop` 走向表按平台拆开写
+  （POSIX 只发信号给主 pid，不收子进程；`--force` 补发 SIGKILL 只在 POSIX 有效），
+  并新增 `PermissionError` 一行；历史行号（`268→280` 那类）改成散文，不再冒充锚点。
+- `profile-neko.md` 文首：删掉「71 条」「还留 `acfbdbc50` 的三行」「探针看不见的那几组」——
+  三句都已与实跑不符，现在只留一处能复现的口径，并明写「这几个数随文档变，跑命令自己取」。
+- `README.md`：不再复述基线 sha（每轮都要跟着改，已经错过两次）。
+- `capability-baseline.md` / `session-refresh-sop.md`：按今天实测改写四处——
+  SessionStart 已挂载（本机 3 条之一就是我们这个脚本）、检测点 #4 不含 `pluginConfigs`、
+  刷新命令只认仓库那份脚本（本机三份副本 sha256 互不相同，会话里跑的那份比仓库旧 8 小时）、
+  幂等句的日期取脚本常量 `BASELINE_DATE`。今天的 10 项差异登记为新发现的未记账漂移，**没有**刷 `BASELINE`。
+- `security-checklist.md`：SEC-2 的常量名单写全（不再数「几处」），分档补回 10 分与 3 处归零那两档，
+  并改正「SEC-2 不参与总分」——`score()` 明明把它算进总分。
+
+### 计数口径（A734 的 O4）
+
+本文件里所有「N 例 / N 项」都是**当轮实跑的历史快照**，不是现值。现值只认命令：
+`python <脚本> --self-test` 与 `python scripts/profile_drift.py --strict`。
+以后新记录只写「本轮新增 X 组，实跑输出为准」，不再把某个数钉成事实。
+
+### 本轮我自己造成的两次事故（都记下来）
+
+1. **把 `sandbox.py` 写成 0 字节。** 一个补用例的脚本里写了 `io.open(P, "w", newline="\n")`：
+   `open(..., "w")` 先把文件截断，`newline` 的校验才抛异常，于是内容没了。
+   恢复路径：HEAD 版 + 本轮临时副本 → `git checkout HEAD -- 该文件` → `patch` 回 N2/O5 那段
+   （补丁脚本 `~/forge-scratch/restore_n2o5.patch`）→ 再依次重跑 `_kill_pid` 注入点、
+   `cmd_stop` 平台化提示、`kill_cases`、例数实算、`plugin-add/rm` 用例三张脚本。
+   恢复后 `--self-test` 187 项通过，12 步 CI 等价流程全绿。
+   **改法（已写进习惯）**：先在全内存里拼好整份内容，写 `路径+.tmp`，再 `os.replace`。
+   这条本文件早就记过一次，这次是我自己没照做。
+2. **反向对照脚本自己烂掉了。** `run_controls.py` 的 A1b、`run_controls4.py` 的 E1、
+   `run_controls6.py` 的 G1 三处锚点在本轮改动后就再也匹配不上，那三组一条断言都没跑。
+   这三张脚本本来就把「命中 0 次」计进失败并退 1（不是我写的宽松版），所以没有假绿；
+   但连续几轮我只看「未变红 0 组」这一行，差点把 SKIP 当成通过。
+   **改法**：三处锚点跟上现在的代码，重跑后 12 / 5 / 8 组全部真变红；
+   以后每次动完代码都要重跑全部控制组，并且数一遍「组数 = 变红数 + 1×失败」，不只看尾巴那行。
+
+### 仍未处理（写清楚，不算已解决）
+
+- `--include-docs` 没接进 CI：本仓文档里有大量示例文本会撞 SEC-1/3/4，逐条人工判过才能豁免。
+- 探针默认覆盖面仍是两份文档。`references/neko/` 那 21 份也带行号形状（`host.py:11`、`schema.py:107` 这类），
+  本轮没纳入；要纳就得先把它们改成全路径写法。
+- 上游 `main` 会一直前进。今天所有结论钉在 `e14f61963`；下一轮先跑 `--fresh`。

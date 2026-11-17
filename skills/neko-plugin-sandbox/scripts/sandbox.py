@@ -768,12 +768,16 @@ def _alive_from_state(state):
     return state != "Z"
 
 
-def _pid_really_alive(pid, nt_probe=None, read_stat=None, run_ps=None, on_nt=None):
+def _pid_really_alive(pid, nt_probe=None, read_stat=None, run_ps=None, on_nt=None,
+                      proc_tree=None):
     """进程还在不在，僵尸算「不在」。四个口子可注入，自检才能在 CI 与本机都跑满分支。
 
     2026-11-17 加接缝（与 _posix_cmdline、_wait_gone 同一口径）：这是 stop 路径上最后一个
     没有用例的探针，而它本月改过两次（Z 态、稀疏格子）。on_nt 让自检能在 ubuntu 上验 Windows
     那一支，也能在 Windows 上验 /proc 那一支；不传就按真实平台走。
+
+    proc_tree 表示「这台机器有没有 /proc 这棵树」。macOS 没有，那里的
+    FileNotFoundError 说的是操作系统，不是进程，不能当成「已经回收」（A734 的 N2）。
     """
     pid = int(pid)
     if (os.name == "nt" if on_nt is None else on_nt):
@@ -790,12 +794,14 @@ def _pid_really_alive(pid, nt_probe=None, read_stat=None, run_ps=None, on_nt=Non
 
     read_stat = read_stat or _stat
     run_ps = run_ps or _ps
+    proc_tree = proc_tree or (lambda: os.path.isdir("/proc"))
     try:
         verdict = _alive_from_state(_state_from_stat(read_stat(pid)))
         if verdict is not None:
             return verdict
     except FileNotFoundError:
-        return False            # /proc/<pid> 整目录没了 = 已经回收
+        if proc_tree():
+            return False        # 有 /proc 的机器上，这个 pid 的条目没了 = 已经回收
     except OSError:
         return True             # 读不动就当作还在：宁可多说一次「没停」，不可谎报已停
     try:
@@ -831,30 +837,45 @@ def _wait_gone(pid, timeout, probe=None, nap=None, steps=None):
     return not alive
 
 
-def _kill_pid(pid, force=False):
+def _kill_pid(pid, force=False, nt=None, kill=None, call=None, wait=None):
     """停下来，并回报有没有确认停掉。
 
-    Windows 的 taskkill 本来就带 /F。POSIX 先发 SIGTERM，那是服务能抓住做收尾的信号。
-    抓住后又挂住不退的进程，旧版照样打印「已停止」，读的人会以为端口空出来了。
-    现在等 KILL_WAIT 秒确认，只有明确 --force 才升级到 SIGKILL。
+    两条腿的语义不同，必须分开写：
+    - Windows：`taskkill /T /F` 一次收整棵进程树，`--force` 不改变行为（本来就是强杀）。
+    - POSIX：只给这一个 pid 发 SIGTERM，**不收子进程**。插件服务自己拉起来的插件进程
+      要靠它自己的收尾逻辑退出。抓住 SIGTERM 又挂住不退的，旧版照样打印「已停止」，
+      读的人会以为端口空出来了；现在等 KILL_WAIT 秒确认，只有明确 --force 才升级到 SIGKILL。
+
+    nt / kill / call / wait 都是注入点：CI 跑在 Linux 上，以前 Windows 那条腿与四个异常分支
+    一次都没被执行过（终检 sweep 第 7 条），PermissionError 分支写了却不咬。
     """
-    if os.name == "nt":
-        subprocess.call(["taskkill", "/PID", str(pid), "/T", "/F"],
-                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        return _wait_gone(pid, KILL_WAIT, steps=NT_WAIT_STEPS)
+    is_nt = (os.name == "nt") if nt is None else nt
+    wait = wait or _wait_gone
+    if is_nt:
+        (call or subprocess.call)(["taskkill", "/PID", str(pid), "/T", "/F"],
+                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return wait(pid, KILL_WAIT, steps=NT_WAIT_STEPS)
+    do_kill = kill or os.kill
     try:
-        os.kill(pid, 15)
+        do_kill(pid, 15)
     except ProcessLookupError:
         return True
-    if _wait_gone(pid, KILL_WAIT):
+    except PermissionError:
+        # 进程在，但不归这个用户。杀不动，更不能说「已停」。
+        log(f"pid={pid} 不归本机用户，SIGTERM 发不出去（PermissionError）")
+        return False
+    if wait(pid, KILL_WAIT):
         return True
     if not force:
         return False
     try:
-        os.kill(pid, 9)
+        do_kill(pid, 9)
     except ProcessLookupError:
         return True
-    return _wait_gone(pid, KILL_WAIT)
+    except PermissionError:
+        log(f"pid={pid} 连 SIGKILL 都发不出去（PermissionError），不是沙箱能停的东西")
+        return False
+    return wait(pid, KILL_WAIT)
 
 def cmd_stop(args):
     root = Path(args.root).expanduser().resolve()
@@ -888,9 +909,15 @@ def cmd_stop(args):
             state_file.unlink(missing_ok=True)
             log(f"已停止 pid={pid}")
         else:
-            log(f"pid={pid} 收到信号后没退出（多半是它抓住了 SIGTERM 又没收尾）。"
-                "状态文件留着，端口大概率还被它占着。确认要强行停就带 --force 重跑，"
-                "那一步会补发 SIGKILL")
+            # 那句话以前对两个平台都讲「重跑会补发 SIGKILL」：Windows 的 taskkill 本来就带 /F，
+            # --force 在 Windows 不改变任何行为，照着提示做的人只会白跑一次（终检 sweep 第 4 条）。
+            nxt = ("POSIX 带 --force 重跑会补发 SIGKILL；Windows 的 taskkill 已经是强杀，"
+                   "重跑只是再发一次同样的命令，得去系统里查这个 pid 为什么不退"
+                   if os.name != "nt" else
+                   "Windows 这条腿已经是 taskkill /T /F；它还不退就去看该 pid 的归属，"
+                   "--force 在这边不改变行为")
+            log(f"pid={pid} 没确认退出（它可能抓住了 SIGTERM 又没收尾，也可能不归本机用户）。"
+                "状态文件留着，端口大概率还被它占着。" + nxt)
     elif action == "gone":
         state_file.unlink(missing_ok=True)
         log(f"pid={pid} 的进程已不存在（服务已退出或中途崩了），只清理状态文件")
@@ -1029,10 +1056,12 @@ def _self_test():
     for k in drop:
         if not env_is_secret(k, vals.get(k, "abcdefghijkl12")):
             bad.append("凭据形状没被删: " + k)
-    for bad_id in ("../../x", ".git", "a/b", "abs:C", "", "1abc"):
+    bad_ids = ("../../x", ".git", "a/b", "abs:C", "", "1abc")
+    good_ids = ("my_plugin", "GalgamePlugin", "a1")
+    for bad_id in bad_ids:
         if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", bad_id):
             bad.append("id 校验放过了 " + repr(bad_id))
-    for good_id in ("my_plugin", "GalgamePlugin", "a1"):
+    for good_id in good_ids:
         if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", good_id):
             bad.append("id 校验误杀 " + good_id)
     # 2026-11-16 补（A571 第 2 条）：stop 判定的全组合。判定与执行分开以后，才能在 CI 里
@@ -1052,9 +1081,10 @@ def _self_test():
             bad.append("stop 判定 verdict=%s alive=%s force=%s 得到 %s 期望 %s"
                        % (verdict, alive, force, got, want))
     # 命令行 → 判定：读不到是 None（要 --force 或按 gone 处理），身份不符才是 False
-    for cmd, want in ((None, None), ("", None),
-                      ("/usr/bin/python3 /srv/user_plugin_server.py", True),
-                      ("C:" + chr(92) + "Windows" + chr(92) + "explorer.exe", False)):
+    verdict_cases = ((None, None), ("", None),
+                     ("/usr/bin/python3 /srv/user_plugin_server.py", True),
+                     ("C:" + chr(92) + "Windows" + chr(92) + "explorer.exe", False))
+    for cmd, want in verdict_cases:
         got = pid_verdict(cmd)
         if got is not want:
             bad.append("pid_verdict(%r) 得到 %s 期望 %s" % (cmd, got, want))
@@ -1081,7 +1111,9 @@ def _self_test():
             bad.append("POSIX 分支：verdict=%s alive=%s 期望 verdict=%s alive=%s（cmd=%r）"
                        % (pid_verdict(cmd), alive, want_verdict, want_alive, cmd))
     # 连 ps 都跑不了（没装、被挡、超时）：算「读不到但进程可能还在」，不能算「已不存在」
-    cmd, alive = _posix_cmdline(4321, _no_proc, _no_ps)
+    no_ps_cases = [(_no_proc, _no_ps)]
+    _np_read, _np_ps = no_ps_cases[0]
+    cmd, alive = _posix_cmdline(4321, _np_read, _np_ps)
     if pid_verdict(cmd) is not None or alive is not True:
         bad.append("ps 跑不了时应为「读不到但进程可能还在」，实得 verdict=%s alive=%s"
                    % (pid_verdict(cmd), alive))
@@ -1104,6 +1136,43 @@ def _self_test():
         got = _alive_from_state(state)
         if got is not want:
             bad.append("_alive_from_state(%s) 得到 %s 期望 %s" % (state, got, want))
+    # _kill_pid 的两条腿与四个异常分支。CI 在 ubuntu 上跑，以前整支一次都没执行过：
+    # 上一轮加的两个 PermissionError 分支就是这么写进去却没验证的（终检 sweep 第 7 条）。
+    # 现在四个注入点（nt / kill / call / wait）全演一遍，Windows 腿在 Linux 上也能判。
+    kill_cases = [
+        (True, [], False, True, True, "Windows：taskkill 收整树，wait 确认即算停"),
+        (True, [], False, False, False, "Windows：taskkill 发了却没确认，不能说已停"),
+        (False, [None], False, True, True, "POSIX：SIGTERM 后退了"),
+        (False, [None], False, False, False, "POSIX：抓住 SIGTERM 又没带 --force"),
+        (False, [None, None], True, False, False, "POSIX：--force 补发 SIGKILL 后仍没确认"),
+        (False, [ProcessLookupError()], False, False, True, "pid 已经先没了 = 已停"),
+        (False, [PermissionError()], False, False, False, "不归本机用户 = 不许说已停"),
+        (False, [None, PermissionError()], True, False, False, "SIGKILL 也发不出去 = 不许说已停"),
+    ]
+    for k_nt, k_sigs, k_force, k_wait, k_want, k_note in kill_cases:
+        it = iter(k_sigs)
+        sent = []
+
+        def _kill(pid, sig, _it=it, _sent=sent):
+            _sent.append(sig)
+            r = next(_it, None)
+            if isinstance(r, Exception):
+                raise r
+            return r
+
+        calls = []
+        got_k = _kill_pid(242, force=k_force, nt=k_nt, kill=_kill,
+                          call=lambda a, **kw: calls.append(a),
+                          wait=lambda p, timeout, **kw: k_wait)
+        if got_k is not k_want:
+            bad.append("%s：_kill_pid 得到 %s 期望 %s" % (k_note, got_k, k_want))
+        if k_nt and (not calls or "/T" not in calls[0] or "/F" not in calls[0]):
+            bad.append("%s：taskkill 没收整树参数：%s" % (k_note, calls))
+        if not k_nt and k_force and sent and sent[-1] != 9:
+            bad.append("--force 那条应补发 SIGKILL(9)，实发 %s" % sent)
+        if k_nt and sent:
+            bad.append("Windows 那条不该走 os.kill，实发 %s" % sent)
+    wg_n = 0
     seen = []
 
     def _probe_gone_third(p):
@@ -1112,16 +1181,20 @@ def _self_test():
 
     if not _wait_gone(7, 1.0, probe=_probe_gone_third, nap=lambda s: None):
         bad.append("第三次探测就没了，_wait_gone 却报没停")
+    wg_n += 1
     if _wait_gone(7, 0.6, probe=lambda p: True, nap=lambda s: None):
         bad.append("一直活着的进程，_wait_gone 报成已停")
+    wg_n += 1
     nap_calls = []
     _wait_gone(7, 0.6, probe=lambda p: True, nap=lambda s: nap_calls.append(s))
+    wg_n += 1
     if len(nap_calls) != 3:
         bad.append("timeout 0.6 应该睡 3 次 0.2，实得 %d 次" % len(nap_calls))
     # Windows 的格子必须稀：一次探测要起一个 PowerShell，密格子等于白等十几秒
     nt_calls = []
     _wait_gone(7, KILL_WAIT, probe=lambda p: nt_calls.append(p) or True,
                nap=lambda s: None, steps=NT_WAIT_STEPS)
+    wg_n += 1
     if len(nt_calls) > 5:
         bad.append("Windows 的探测格子太密：跑了 %d 次 PowerShell 形状的探测" % len(nt_calls))
     # A464 第 13 条欠的三组用例：toml 读段、_plugin_rows、超时夹紧。本轮全补上。
@@ -1219,12 +1292,15 @@ def _self_test():
             return 1
 
     try:
+        hw_n = 0
         globals()["http_get"] = lambda port, path, timeout=2: (200, '{"status": "ok"}')
         if _wait_health(None, 1, hw_log, 5) != 200:
             bad.append("服务就绪时 _wait_health 没返回 200")
+        hw_n += 1
         globals()["http_get"] = lambda port, path, timeout=2: (503, "")
         if _wait_health(None, 1, hw_log, 0) is not None:
             bad.append("timeout=0 应一次都不探，直接返回 None")
+        hw_n += 1
         hw_exit = None
         import contextlib
         import io
@@ -1234,18 +1310,22 @@ def _self_test():
                 _wait_health(_Exited(), 1, hw_log, 30)
             except SystemExit as e:
                 hw_exit = (e.code, buf.getvalue())
+        hw_n += 1
         if hw_exit is None:
             bad.append("服务提前退出时 _wait_health 没停手")
         elif "第40行" not in hw_exit[1] or "code=1" not in hw_exit[1]:
             bad.append("提前退出的诊断没带出日志尾巴与退出码：%r" % (hw_exit[1][-120:],))
         elif hw_exit[0] == 0:
             bad.append("提前退出要走 die，退出码不该是 0")
+        hw_n += 1
     finally:
         globals()["http_get"] = _real_get
         shutil.rmtree(hw_root, ignore_errors=True)
     # 2026-11-17 补：_pid_really_alive 是 stop 路径上最后一个没用例的探针，本月改过两次。
     # 三条分支（nt、/proc、ps）都靠注入演，Windows 与 ubuntu 上跑同一组断言。
     ra_n = 0
+    HAS_PROC = lambda: True
+    NO_PROC = lambda: False
     ra_cases = [
         (lambda p: "242 (python3) S 1 242 242 0 -1 42 1 1", None, True),     # 正常睡眠 = 还在
         (lambda p: "242 (python3) Z 1 242 242 0 -1 42 1 1", None, False),    # 僵尸 = 已退
@@ -1264,11 +1344,30 @@ def _self_test():
     for stat_src, ps_src, want_ra in ra_cases:
         ra_n += 1
         ra = stat_src if callable(stat_src) else (lambda p, _t=stat_src: _t)
-        got_ra = _pid_really_alive(242, read_stat=ra, run_ps=ps_src, on_nt=False)
+        got_ra = _pid_really_alive(242, read_stat=ra, run_ps=ps_src, on_nt=False,
+                                   proc_tree=HAS_PROC)
         if got_ra is not want_ra:
             bad.append("_pid_really_alive(stat=%r, ps=%r) 期望 %r，得到 %r"
                        % (stat_src if isinstance(stat_src, str) else "callable", ps_src,
                           want_ra, got_ra))
+    # A734 的 N2：macOS 没有 /proc。旧实现把 FileNotFoundError 当「已回收」，
+    # stop 于是刚发完 SIGTERM 就报「已停止」，被抓住的服务其实还在。
+    ra_mac = [
+        ("242 (python3) Z 1 2 3 0 -1 4 1 1", lambda p: (0, b"Z\n"), False),
+        ("242 (python3) S 1 2 3 0 -1 4 1 1", lambda p: (0, b"S\n"), True),
+    ]
+    for stat_src, ps_src, want_mac in ra_mac:
+        ra_n += 1
+        got_mac = _pid_really_alive(242, read_stat=lambda p: (_ for _ in ()).throw(FileNotFoundError()),
+                                    run_ps=ps_src, on_nt=False, proc_tree=NO_PROC)
+        if got_mac is not want_mac:
+            bad.append("macOS 那支（ps 给 %r）期望 %r，得到 %r"
+                       % (ps_src(0), want_mac, got_mac))
+    ra_n += 1
+    if _pid_really_alive(242, read_stat=lambda p: (_ for _ in ()).throw(FileNotFoundError()),
+                         run_ps=lambda p: (1, b""), on_nt=False, proc_tree=NO_PROC) is not False:
+        bad.append("没有 /proc 且 ps 也说没有这个 pid 时，应当判已退出")
+
     # nt 那一支同样用注入演，两边平台都能验（on_nt=True 时不碰 PowerShell）
     ra_n += 1
     if _pid_really_alive(242, on_nt=True, nt_probe=lambda p: False) is not False:
@@ -1299,9 +1398,132 @@ def _self_test():
                 bad.append("坏 pid %r 那一步不该顺手删掉状态文件" % (bad_pid,))
     finally:
         shutil.rmtree(stop_root, ignore_errors=True)
-    total = (len(keep) + len(drop) + 9 + len(stop_cases) + 4 + len(posix_cases) + 1
-             + len(stat_cases) + len(alive_cases) + 4 + len(x_tomls) + len(x_flags)
-             + len(x_rows) + x_n + 5 + ra_n) + _symlink_cases(bad)
+    # 例数全部实算（A734 的 O3）：以前这里写死 9 / 4 / 1 / 4 / 5，
+    # 加一例会忘改一处，报出来的「164 项」就成了假证据。
+    # _server_env 的删凭据循环：以前用例只问 env_is_secret 这个名字形状判得对不对，
+    # 「真从子进程环境里删掉了没有」这一环没人核过（终检 sweep 第 6 条）。
+    x_root2 = Path(tempfile.mkdtemp(prefix="sb-scrub-"))
+    scrub_drop = ["ZZ_TEST_GITHUB_TOKEN", "ZZ_TEST_API_KEY", "ZZ_TEST_SECRET"]
+    scrub_keep = ["SSH_AUTH_SOCK", "ZZ_TEST_PWD_LIKE", "PATH"]
+    saved = {}
+    try:
+        for k in scrub_keep + scrub_drop:
+            saved[k] = os.environ.get(k)
+            os.environ[k] = "Sup3rS3cretValue" if k in scrub_drop else "keep-me"
+        ns_env = argparse.Namespace(plugin_startup_timeout=60.0, port_resolved=43117,
+                                    isolate_home=True)
+        se_env = _server_env(x_root2, ns_env)
+        for k in scrub_drop:
+            x_n += 1
+            if k in se_env:
+                bad.append("_server_env 没删掉凭据形状变量 " + k)
+        for k in ("SSH_AUTH_SOCK", "PATH"):
+            x_n += 1
+            if k not in se_env:
+                bad.append("_server_env 把该留的运行变量删了：" + k)
+        # 删了哪些要报出来：不报的话，「删了 0 个」与「这段根本没执行」看着一样
+        x_n += 1
+        cap_buf = io.StringIO()
+        with contextlib.redirect_stdout(cap_buf):
+            _server_env(x_root2, ns_env)
+        if "已从沙箱环境删除" not in cap_buf.getvalue():
+            bad.append("_server_env 没报告删了哪些变量")
+    finally:
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+        shutil.rmtree(x_root2, ignore_errors=True)
+
+    # plugin-add / plugin-rm 的真实文件动作。这两个函数会往被挂载的 checkout 里写，
+    # 以前只有读证没有用例（终检 sweep 第 12 条）。全程在临时目录里跑。
+    pa_n = 0
+    pa_root = Path(tempfile.mkdtemp(prefix="sb-plug-"))
+    try:
+        repo = pa_root / "repo"
+        (repo / "plugin" / "plugins").mkdir(parents=True)
+        src = pa_root / "src"
+        src.mkdir()
+        (src / "main.py").write_text("print(1)\n", encoding="utf-8")
+        (src / ".git").mkdir()                      # 该被 ignore_patterns 挡掉
+        (src / ".git" / "junk").write_text("x", encoding="utf-8")
+        ns = argparse.Namespace(root=str(pa_root), src=str(src), link=False)
+
+        def _cap(fn, *a):
+            buf = io.StringIO()
+            code = 0
+            with contextlib.redirect_stdout(buf):
+                try:
+                    fn(*a)
+                except SystemExit as e:
+                    code = e.code or 0
+            return code, buf.getvalue()
+
+        # 没写 auto_start：要复制成功，并且明确警告「不会被 autostart」
+        (src / "plugin.toml").write_text('[plugin]\nid = "demo_plugin"\nversion = "1"\n',
+                                         encoding="utf-8")
+        rc, out = _cap(cmd_plugin_add, ns)
+        pa_n += 1
+        dest = repo / "plugin" / "plugins" / "demo_plugin"
+        if rc != 0 or not (dest / "main.py").is_file():
+            bad.append("plugin-add 没把插件复制进去（rc=%s，%s）" % (rc, out[-120:]))
+        pa_n += 1
+        if (dest / ".git").exists():
+            bad.append("plugin-add 把 .git 也复制进别人的 checkout 了")
+        pa_n += 1
+        if "auto_start" not in out:
+            bad.append("plugin-add 没报告 auto_start 缺失")
+        # 重装：dest 已存在时要能替换，不许 rmtree 抛
+        rc2, out2 = _cap(cmd_plugin_add, ns)
+        pa_n += 1
+        if rc2 != 0 or not (dest / "main.py").is_file():
+            bad.append("plugin-add 重装失败（rc=%s，%s）" % (rc2, out2[-120:]))
+        # 非法 id：必须拒绝，否则 rmtree 会删到 plugins 之外
+        (src / "plugin.toml").write_text('[plugin]\nid = "../evil"\n', encoding="utf-8")
+        rc3, out3 = _cap(cmd_plugin_add, ns)
+        pa_n += 1
+        if rc3 == 0:
+            bad.append("非法插件 id「../evil」没被拦住")
+        if (pa_root / "evil").exists() or (repo / "plugin" / "evil").exists():
+            bad.append("非法 id 那一步真写出了目录，越界了")
+        # plugin.toml 缺失
+        (src / "plugin.toml").unlink()
+        rc4, _o4 = _cap(cmd_plugin_add, ns)
+        pa_n += 1
+        if rc4 == 0:
+            bad.append("src 下没有 plugin.toml 时 plugin-add 没拒绝")
+        # plugin-rm：dry-run 不许动手，正式删要删干净
+        (src / "plugin.toml").write_text('[plugin]\nid = "demo_plugin"\n', encoding="utf-8")
+        _cap(cmd_plugin_add, ns)
+        pa_n += 1
+        rc5, out5 = _cap(cmd_plugin_rm, argparse.Namespace(root=str(pa_root), id="demo_plugin",
+                                                           dry_run=True))
+        if not (dest / "main.py").is_file():
+            bad.append("plugin-rm --dry-run 把目录删了：%s" % out5[-120:])
+        pa_n += 1
+        rc6, out6 = _cap(cmd_plugin_rm, argparse.Namespace(root=str(pa_root), id="demo_plugin",
+                                                           dry_run=False))
+        if dest.exists():
+            bad.append("plugin-rm 没删掉插件目录（rc=%s，%s）" % (rc6, out6[-120:]))
+        pa_n += 1
+        rc7, _o7 = _cap(cmd_plugin_rm, argparse.Namespace(root=str(pa_root), id="gone_plugin",
+                                                          dry_run=False))
+        if rc7 == 0:
+            bad.append("删一个不存在的插件 id 应该报错，不该静默成功")
+        pa_n += 1
+        rc8, _o8 = _cap(cmd_plugin_rm, argparse.Namespace(root=str(pa_root), id="../../etc",
+                                                          dry_run=False))
+        if rc8 == 0:
+            bad.append("plugin-rm 的 --id 没做同样校验，可以指到 plugins 之外")
+    except OSError as e:
+        bad.append("plugin-add/rm 用例没跑成：" + type(e).__name__)
+    finally:
+        shutil.rmtree(pa_root, ignore_errors=True)
+    total = (len(keep) + len(drop) + len(bad_ids) + len(good_ids) + len(stop_cases)
+             + len(verdict_cases) + len(posix_cases) + len(no_ps_cases)
+             + len(stat_cases) + len(alive_cases) + wg_n + len(x_tomls) + len(x_flags)
+             + len(x_rows) + x_n + hw_n + ra_n + len(kill_cases) + pa_n) + _symlink_cases(bad)
     print("SANDBOX SELF-TEST: %s（%d 项）" % ("PASS" if not bad else "FAIL", total))
     for m in bad:
         print("  FAIL:", m)

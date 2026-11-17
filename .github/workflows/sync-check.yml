@@ -54,7 +54,10 @@ jobs:
         run: |
           rc=2
           for i in 1 2 3; do
-            python scripts/profile_drift.py --strict; rc=$?
+            # 默认 shell 是 bash -e：直接写「cmd; rc=$?」会在 python 非零时先退出，
+            # 走不到 rc=$?，重试与 sleep 一次都不会发生（A734 的 N1）。用 || 接单子。
+            rc=0
+            python scripts/profile_drift.py --strict || rc=$?
             if [ "$rc" -ne 2 ]; then break; fi
             echo "取不到上游（限流或网络），第 $i 次重试"; sleep $((i * 15))
           done

@@ -31,21 +31,26 @@ description: 基于 N.E.K.O 官方仓库搭建隔离的插件运行时沙箱：�
 | 项 | 事实 | 出处 |
 |---|---|---|
 | 运行时入口 | `plugin/user_plugin_server.py` | 文件头 docstring：「Main entry point for the HTTP server」(L1-5) |
-| standalone 语义 | `build_plugin_server_app(manage_lifecycle=True)` —— 由它自己扫描并 autostart | `plugin/user_plugin_server.py:81`；该参数**默认是 `False`**（`http_app.py:280`），只有 standalone 入口传 `True` |
+| standalone 语义 | `build_plugin_server_app(manage_lifecycle=True)` —— 由它自己扫描并 autostart | `plugin/user_plugin_server.py:81` 传 `manage_lifecycle=True`；该参数**默认是 `False`**（`plugin/server/http_app.py:280` 的 `manage_lifecycle` 形参），只有 standalone 入口传 `True` |
 | autostart 的实际开关 | `if manage_lifecycle: await lifecycle_startup()` —— **不看环境变量** | `plugin/server/http_app.py`（startup 段的 `if manage_lifecycle:`） |
-| 端口 | `NEKO_USER_PLUGIN_SERVER_PORT`；上游默认 `USER_PLUGIN_SERVER_PORT=48916`；standalone 入口被占用时自己向后找（50 次）并回写该变量 | `config/network.py:194`；`user_plugin_server.py:173`、`:180`、`:184` |
-| 健康检查 | `GET /health` → `{"status": "ok", "time": <iso>}` | `plugin/server/routes/health.py:19-21` |
-| 插件源目录 | `plugin/plugins/<plugin_id>/`，含 `plugin.toml` 的 `[plugin] id` / `version`；内置根 = 仓库 `plugin/plugins` | `docs/plugins/cli.md`；`plugin/settings.py:69-71` |
+| 端口 | `NEKO_USER_PLUGIN_SERVER_PORT`；上游默认 `USER_PLUGIN_SERVER_PORT=48916`；standalone 入口被占用时自己向后找（50 次）并回写该变量 | `config/network.py:193` 的 `USER_PLUGIN_SERVER_PORT`；`plugin/user_plugin_server.py:173` 读 `NEKO_USER_PLUGIN_SERVER_PORT`、`:180` 调 `_find_available_port`、`:184` 回写该变量 |
+| 健康检查 | `GET /health` → `{"status": "ok", "time": <iso>}` | `plugin/server/routes/health.py:20` 起 `health()`，返回体在 :22 |
+| 插件源目录 | `plugin/plugins/<plugin_id>/`，含 `plugin.toml` 的 `[plugin] id` / `version`；内置根 = 仓库 `plugin/plugins` | `docs/plugins/cli.md`；`plugin/settings.py:69-71` 的 `get_builtin_plugin_config_root` |
 | 嵌入选址标志 | **已不再是开关**：`NEKO_PLUGIN_HOSTED_BY_AGENT` 只剩 agent_server 在写，`http_app.py` 无读取点；autostart 由上面那个参数决定 | `app/agent_server/api_runtime.py`（`NEKO_PLUGIN_HOSTED_BY_AGENT` 赋值处）；`http_app.py`（`manage_lifecycle` 上方注释明说早先读它会在 import 时冻结） |
-| **autostart 的额外前置** | 除上面参数外，还要同时满足：清单 `[plugin_runtime] auto_start = true`（**省略即 false**）、`runtime_enabled` 非 `False`、`runtime_load_state != "failed"`、`runtime_source_missing != True`、且 id 不在 `plugin_autostart_pending.json` 待审批集合里 | `plugin/core/registry.py:1290-1296`；`plugin/server/application/plugins/registry_service.py:1254-1276` |
-| Windows 事件循环 | 强制 `WindowsSelectorEventLoopPolicy`（在起 event loop 之前） | `user_plugin_server.py:59-74` |
+| **autostart 的额外前置** | 除上面参数外，还要同时满足：清单 `[plugin_runtime] auto_start = true`（**省略即 false**）、`runtime_enabled` 非 `False`、`runtime_load_state != "failed"`、`runtime_source_missing != True`、且 id 不在 `plugin_autostart_pending.json` 待审批集合里 | `plugin/core/registry.py:1293` 的 `auto_start_val` 默认 False（`parse_bool_config` 在 :1296）；`plugin/server/application/plugins/registry_service.py:1254` 的 `_get_autostart_plugin_ids_sync`（候选排序返回在 :1276） |
+| Windows 事件循环 | 强制 `WindowsSelectorEventLoopPolicy`（在起 event loop 之前） | `plugin/user_plugin_server.py:59` 起的 `_configure_windows_event_loop_policy` |
 | CLI 能力 | `init / setup-repo / create-repo / sync / check / lint / precheck / build / install / analyze / publish`（**没有 run / validate / release / deps**） | `plugin/neko_plugin_cli/cli.py:105-113` + 各 `*_cmd.register` |
-| **验证用路由** | `GET /plugins`（列表）、`GET /plugin/status`（逐插件状态，验 autostart 用这条）、`GET /plugin/messages`；`GET /runs`（集合）405，集合只有 POST；单个 run 有 `GET /runs/{run_id}`（需先有 run_id，不当探活用） | `routes/plugins.py:42`、`:35`；`routes/messages.py:22`；`routes/runs.py:35`、`:44` |
-| **用户数据根** | Windows 上取 **`LOCALAPPDATA`**（不是 `HOME`/`USERPROFILE`） | `utils/config_manager/storage_roots.py:_get_standard_data_directory_candidates`（L367-381） |
+| **验证用路由** | `GET /plugins`（列表）、`GET /plugin/status`（逐插件状态，验 autostart 用这条）、`GET /plugin/messages`；`GET /runs`（集合）405，集合只有 POST；单个 run 有 `GET /runs/{run_id}`（需先有 run_id，不当探活用） | `plugin/server/routes/plugins.py:35` 的 `plugin_status`、`:42` 的 `list_plugins`；`plugin/server/routes/messages.py:22` 的 `get_plugin_messages`；`plugin/server/routes/runs.py:35` 的 `runs_create` 是 POST、`:44` 的 `runs_get` |
+| **用户数据根** | Windows 上取 **`LOCALAPPDATA`**（不是 `HOME`/`USERPROFILE`） | `utils/config_manager/storage_roots.py: _get_standard_data_directory_candidates`（def 367，函数体到 381） |
 | **用户插件执行根** | `PLUGIN_CONFIG_ROOT` 可显式覆盖（上游已标 legacy，新代码用 `PLUGIN_CONFIG_ROOTS` / `USER_PLUGIN_CONFIG_ROOT`；env 仍生效）；否则 `<数据根>/N.E.K.O/.neko-plugin-installations/plugins` | `plugin/settings.py:get_user_plugin_exec_root`（L102-118） |
-| **插件启动超时** | `NEKO_PLUGIN_STARTUP_TIMEOUT`，默认 **10.0s**，且 **>300s 直接 raise ValueError** | `plugin/settings.py:314-315`、`:766-769`（raise 在 768-769） |
+| **插件启动超时** | `NEKO_PLUGIN_STARTUP_TIMEOUT`，默认 **10.0s**，且 **>300s 直接 raise ValueError** | `plugin/settings.py:315` 的 `PLUGIN_STARTUP_TIMEOUT` 默认 10.0、`:769` 处 >300 直接 raise |
 
-**复核记录 2026-11-17（commit `db81c1be0`）**：本表 6 个上游锚点按当前 main 改行号 —— `manage_lifecycle` 默认值 `http_app.py:268→280`，超时 raise `settings.py:788-791→766-769`，CLI 注册块 `cli.py:105-113` 复核后未变（我第一次误改成 106-114，已改回），端口默认 `network.py:193→194`；`user_plugin_server.py:81/:173/:184` 与 `registry.py:1290-1296`、`registry_service.py:1254-1276` 复核后未变。另改正一条事实：内置插件 12 个变 11 个（`wechat_integration` 已移除），且 11 个全部显式写 `auto_start`。
+**复核记录 2026-11-17（commit `db81c1be0`，同日在 `e14f61963` 上复核对齐）**：本表上游锚点按当前 main 改行号 ——
+`plugin/server/http_app.py` 的 `manage_lifecycle` 默认值旧记 268，现 280；`plugin/settings.py` 的超时 raise 旧记 788-791，现 766-769。
+复核后行号未变的那几格见上表：`plugin/user_plugin_server.py`、`config/network.py`、`plugin/neko_plugin_cli/cli.py`、
+`plugin/core/registry.py`、`plugin/server/application/plugins/registry_service.py`。两处是我自己改错的，已改回：`plugin/neko_plugin_cli/cli.py` 一度写成 106-114，
+`config/network.py` 一度写成 194。另改正一条事实：内置插件 12 个变 11 个（`wechat_integration` 已移除），
+且 11 个全部显式写 `auto_start`，只有 `web_search` 是 `true`。
 
 **复核记录 2026-11-07（commit `645da54`）**：本表相对旧版改了 3 处 ——
 ① 嵌入标志从「环境变量即开关」改为「`manage_lifecycle` 参数即开关」；
@@ -68,22 +73,23 @@ python $S plugin-add --root <ROOT> --src <插件目录>       # 会同时报告 
 python $S serve     --root <ROOT>                        # 前台常驻（推荐，交给后台任务托管）
 #   或：python $S start --root <ROOT>                     # 起服务 → 等 /health → 返回
 python $S status    --root <ROOT>                        # health + /plugins + /plugin/status + /plugin/messages
-python $S stop      --root <ROOT>                        # 先验 pid 身份再动手，五种走向见下
+python $S stop      --root <ROOT>                        # 先验 pid 身份再动手，走向表见下
 python $S plugin-rm --root <ROOT> --id <插件id>          # 撤掉插件，恢复 checkout 干净
 ```
 
 **为什么每次都要 sync**：官方仓库迭代很快（实测一次同步就落后 1 个提交）。拿旧源码验出来的结论，
 可能对应一个已经修掉的 bug——这类"验证过时"比没验证更糟。
 
-## stop 的五种走向
+## stop 的走向（表就是清单，别处不要再抄它有几行）
 
 `stop` 先读该 pid 的命令行，确认它真是沙箱服务才动手。机器重启后 pid 会被复用，
 验不出身份就开枪会打到宿主自己的进程。动手之后还要回头确认它真的没了，确认不到就不说「已停止」。
 
 | 判定 | 行为 | 要 `--force` 吗 |
 |---|---|---|
-| 命令行里有 `user_plugin_server.py`，且确认已退出 | 杀掉进程树，清状态文件，打印「已停止」 | 不用 |
-| 发了信号但进程没退（它抓住了 SIGTERM 又没收尾） | 不动状态文件，打印端口可能还被占着 | 要：带 `--force` 重跑会补发 SIGKILL |
+| 命令行里有 `user_plugin_server.py`，且确认已退出 | Windows：`taskkill /T /F` 收整棵进程树。POSIX：只给该 pid 发 SIGTERM，**不收子进程**——插件服务自己拉起的插件进程要靠它自己的收尾逻辑退出。之后清状态文件，打印「已停止」 | 不用 |
+| 发了信号但进程没退（它抓住了 SIGTERM 又没收尾） | 不动状态文件，打印端口可能还被占着 | 只在 POSIX 有用：带 `--force` 重跑会补发 SIGKILL。Windows 的 taskkill 本来就带 `/F`，`--force` 在这边不改变行为，重跑只是再发一次同样的命令 |
+| 信号发不出去（进程不归本机用户，`PermissionError`） | 不发信号、不动状态文件，日志写明这个 pid 不是沙箱能停的东西 | 不用：`--force` 也发不出去，别把 force 当「无视权限」 |
 | pid 已不存在（服务崩了，或 `start` 超时后自行终止） | 只清状态文件 | 不用 |
 | pid 属于别的进程（重启后复用） | 不杀，只清状态文件，并提示人工核对端口 | 不用，也不许用：force 的意思不是「是别人的进程也照杀」 |
 | 命令行读不到、进程还在 | 拒绝动手，报原因 | 核对端口归属后带 `--force` 重跑 |
@@ -104,7 +110,7 @@ Linux 读 `/proc/<pid>/cmdline` 与 `/proc/<pid>/stat`。macOS 没有 `/proc`，
 2. **外部 checkout 不写 `.venv`** → 用 `--repo` 挂载别人的源码时，环境建在 `<ROOT>/.venv`。
 3. **端口独占** → 先探测空闲再传给服务端，避免和用户正在跑的 N.E.K.O 撞端口（脚本默认 43117，
    刻意避开上游的 48916）。这也正好是上游后来推荐的做法：仲裁放在拉起方、把结果通过
-   `NEKO_USER_PLUGIN_SERVER_PORT` 发布给子进程（`config/network.py:199-234` 的 docstring 讲清了
+   `NEKO_USER_PLUGIN_SERVER_PORT` 发布给子进程（`config/network.py:199` 起的 `resolve_user_plugin_base` docstring 讲清了
    为什么该这样）；standalone 入口的自增只是兜底。
 4. **目录独立** → 日志、状态全落在 `<ROOT>`。
 5. **显式 standalone** → `user_plugin_server.py` 硬编码 `manage_lifecycle=True`，autostart 一定走。
@@ -131,8 +137,8 @@ Linux 读 `/proc/<pid>/cmdline` 与 `/proc/<pid>/stat`。macOS 没有 `/proc`，
 | 2 | uv 报 SSL 证书失败 | 本机代理换了根证书，uv 默认用打包根证书 | `UV_SYSTEM_CERTS=1`（旧名 `UV_NATIVE_TLS=1`）+ `UV_LINK_MODE=copy`（C: → E: 跨盘硬链接会失败） |
 | 3 | `/health` 明明 200，`status` 却报 `WinError 10061 连接被拒` | `urllib` 吃了 `HTTP_PROXY=127.0.0.1:xxxx`，把本机回环也代理转发 | 探活用 `ProxyHandler({})` 显式绕过代理 |
 | 4 | 服务刚 `/health` 200 就消失，日志无任何退出记录 | 父进程带着 job object 时（受管后台任务那种），子进程随 job 一起被清。父进程只是普通命令时不会 | 要常驻就用 `serve` 交给受管后台任务。`start` 的 `DETACHED_PROCESS` 只挡得住普通父进程退出，挡不住 job object。两侧都实测过（2026-11-17）：`start` 起的服务在父命令退出后仍活着，`stop` 4.9 秒确认真的停；`serve` 的受管任务被终止时整棵树一起消失，状态文件留下，下一次 `stop` 走 `gone` 分支只清状态 |
-| 5 | 插件被判 `failed`（如 `web_search`），日志写明 `startup timed out after 10.0s` | 上游默认 `NEKO_PLUGIN_STARTUP_TIMEOUT=10`，冷 venv 首次 import 重依赖远超 | 脚本默认传 **60s**（`--plugin-startup-timeout` 可调）；**别超过 300s**，上游 `settings.py:769` 会直接 raise |
-| 6 | 服务起来了、`/plugins` 里**有**这个插件、`/plugin/status` 显示它不是 running | 上游 `core/registry.py:1293`「没写 `plugin_runtime.auto_start` 时默认关闭」。仓库里 11 个内置插件全部显式写了 `auto_start`，只有 `web_search` 是 `true`（`plugin/plugins/web_search/plugin.toml:23`），其余 10 个是 `false` | 在插件 `plugin.toml` 写 `[plugin_runtime] auto_start = true`；`plugin-add` 现在会直接报告这一项 |
+| 5 | 插件被判 `failed`（如 `web_search`），日志写明 `startup timed out after 10.0s` | 上游默认 `NEKO_PLUGIN_STARTUP_TIMEOUT=10`，冷 venv 首次 import 重依赖远超 | 脚本默认传 **60s**（`--plugin-startup-timeout` 可调）；**别超过 300s**，上游 `plugin/settings.py:769` 会直接 raise |
+| 6 | 服务起来了、`/plugins` 里**有**这个插件、`/plugin/status` 显示它不是 running | 上游 `plugin/core/registry.py:1293`「没写 `plugin_runtime.auto_start` 时默认关闭」。仓库里 11 个内置插件全部显式写了 `auto_start`，只有 `web_search` 是 `true`（`plugin/plugins/web_search/plugin.toml:23`），其余 10 个是 `false` | 在插件 `plugin.toml` 写 `[plugin_runtime] auto_start = true`；`plugin-add` 现在会直接报告这一项 |
 | 7 | 列表里有、`auto_start` 也写了，还是不启动 | 该 id 落在 `plugin_autostart_pending.json` 的待审批集合里（新装/导入的插件默认待审批，要用户在面板里开独立开关） | 沙箱是全新数据根，一般没有该文件；若复用了旧 `<ROOT>`，删掉 `state/LocalAppData/N.E.K.O/` 下那个 json 再启 |
 
 另有两个 Windows 专属陷阱：`os.execve` 换解释器直接 **SIGSEGV**（已弃用，改子进程前台等待）；

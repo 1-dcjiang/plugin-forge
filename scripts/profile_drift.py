@@ -11,9 +11,11 @@
 
 用法
   python scripts/profile_drift.py [--profile 路径] [--json] [--strict] [--fresh]
+  python scripts/profile_drift.py --self-test
 
-  默认只报告：不改文件、不因漂移失败（退出码 0）。--strict 时有漂移退 1，留给以后要 blocking
-  的场合；CI 现在按非阻塞接。--fresh 忽略缓存重拉。
+  不带 --profile 时一次核对 PROFILES 里的两份文档（profile-neko.md 与沙箱 SKILL.md）。
+  默认只报告：不改文件、不因漂移失败（退出码 0）。--strict 时-blocking，CI 就跑这一条。
+  --fresh 忽略缓存重拉。
 
 缓存
   拉到的上游文件放在 scripts/.drift-cache/（已加进 .gitignore），避免一次跑打上百次 API。
@@ -22,13 +24,17 @@
 匿名限额是一小时 60 次。CI 里给这一步传 GITHUB_TOKEN，否则跑不了几条就限流。
 限流与断网不算漂移：那些锚点报 unreachable，脚本退 2，不冒充「上游删了文件」的结论。
 
-退出码：0 报告完成；--strict 且有漂移、或有锚点缺符号可比对（weak）时退 1；
-有锚点取不到上游时 2（包括根本取不到 sha）。weak 也算失败是 2026-11-17 改的：
-那句「没有可比对的符号」是我们自己的写法问题，让它静默通过就是在门禁里留一格假绿。
+退出码：0 报告完成；--strict 且有漂移、有锚点缺符号可比对（weak）、或有锚点只写了文件名
+（写法核不了）时退 1；有锚点取不到上游时 2（包括根本取不到 sha）。
+weak 与「写法核不了」都算失败，因为这两句都是我们自己的写法问题：探针看不见的那一条，
+才是行号写错还能过关的那一条（2026-11-17 的外部审阅 A734 就是这么进来的）。
 """
 import argparse
 import base64
+import contextlib
+import http.client
 import json
+import io
 import os
 import re
 import sys
@@ -36,6 +42,10 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
 DEFAULT_PROFILE = os.path.join(REPO, "skills", "plugin-forge", "references", "profile-neko.md")
+# 门禁覆盖面。沙箱 SKILL.md 的契约表也逐条指向上游，以前它不在任何自动核对里，
+# 所以我把 config/network.py 的行号写错都没人报（A734 的 N3）。
+PROFILES = [DEFAULT_PROFILE,
+            os.path.join(REPO, "skills", "neko-plugin-sandbox", "SKILL.md")]
 CACHE_DIR = os.path.join(HERE, ".drift-cache")
 HEAD_TTL = 24 * 3600
 UPSTREAM = "Project-N-E-K-O/N.E.K.O"
@@ -101,25 +111,33 @@ def api(url):
             return json.loads(r.read().decode("utf-8", "replace")), None
     except urllib.error.HTTPError as e:
         return None, classify(e.code)
-    except (ValueError, TimeoutError, OSError):
+    except (ValueError, TimeoutError, OSError, http.client.HTTPException):
+        # IncompleteRead 等 http.client 异常既不是 OSError 也不是 ValueError：
+        # 读响应体中途被截断时旧版会抛 traceback，退出码 1，被读成「有漂移」（A734 的 O1）。
         return None, "net"
 
 
-def resolve_head(use_cache=True, max_age=HEAD_TTL):
-    """取上游当前 main 的 sha。缓存超过 max_age 秒就重取，否则「当前 main」这句话不成立。"""
+def resolve_head(use_cache=True, max_age=HEAD_TTL, cache_dir=None, get=None):
+    """取上游当前 main 的 sha。缓存超过 max_age 秒就重取，否则「当前 main」这句话不成立。
+
+    cache_dir 与 get 可注入：这一段以前只能靠真网络演，缓存命中、过期重取、
+    取不到 sha 三条分支在 CI 里一次都没跑过（终检 sweep 第 14 条）。
+    """
     import time
-    mark = os.path.join(CACHE_DIR, "head.txt")
+    get = get or api
+    cache_dir = cache_dir or CACHE_DIR
+    mark = os.path.join(cache_dir, "head.txt")
     if use_cache and os.path.isfile(mark) and time.time() - os.path.getmtime(mark) <= max_age:
         with open(mark, encoding="utf-8") as f:
             sha = f.read().strip()
         if sha:
             return sha, True
-    meta, err = api("https://api.github.com/repos/" + UPSTREAM)
+    meta, err = get("https://api.github.com/repos/" + UPSTREAM)
     branch = (meta or {}).get("default_branch") or "main"
-    data, err2 = api("https://api.github.com/repos/%s/commits/%s" % (UPSTREAM, branch))
+    data, err2 = get("https://api.github.com/repos/%s/commits/%s" % (UPSTREAM, branch))
     sha = (data or {}).get("sha", "")
     if sha:
-        os.makedirs(CACHE_DIR, exist_ok=True)
+        os.makedirs(cache_dir, exist_ok=True)
         with open(mark, "w", encoding="utf-8") as f:
             f.write(sha)
         return sha, False
@@ -157,7 +175,9 @@ def api_bytes(url):
             return r.read(), None
     except urllib.error.HTTPError as e:
         return None, classify(e.code)
-    except (ValueError, TimeoutError, OSError):
+    except (ValueError, TimeoutError, OSError, http.client.HTTPException):
+        # IncompleteRead 等 http.client 异常既不是 OSError 也不是 ValueError：
+        # 读响应体中途被截断时旧版会抛 traceback，退出码 1，被读成「有漂移」（A734 的 O1）。
         return None, "net"
 
 
@@ -222,6 +242,33 @@ def window_nums(seg):
     return sorted(set(out))
 
 
+DEFINITION_RE_CACHE = {}
+
+
+def _definition_pattern(name):
+    """名字要以定义的身份出现：def/class/const 等关键字后、`NAME =`，或 `NAME:`。
+
+    2026-11-17 按 A734 的 N4 加。旧判据只问「这名字在不在整个文件里」，注释与字符串里提一句
+    也算过，`LLM`、`images`、`_brief` 这类短名几乎必过，那 18 条符号锚的「全对」就等于 grep 命中。
+    """
+    rx = DEFINITION_RE_CACHE.get(name)
+    if rx is None:
+        n = re.escape(name)
+        rx = re.compile(
+            r"(?:^|\s)(?:def|class|function|const|let|var|type|interface|enum)\s+" + n + r"\b"
+            + r"|\b" + n + r"\s*=(?!=)"
+            + r"|\b" + n + r"\s*:"
+            # __all__ 里的导出写法："NAME",
+            + r"|[\"']" + n + r"[\"']"
+            # markdown 文件里符号就是标题或粗体／行内代码，没有 def 这一说
+            + r"|^#{1,6}[^\n]*" + n
+            + r"|^\s*(?:\*\*|`)[^\n]*" + n,
+            re.M)
+        DEFINITION_RE_CACHE[name] = rx
+    return rx
+
+
+
 def _route_literals(seg):
     """把反引号里的路由字面量去掉，只留下真正的代码符号。
 
@@ -257,6 +304,78 @@ def _anchor_symbol_span(seg):
     return out[:6]
 
 
+LOOSE_RE = re.compile(r"(?<![\w/.\-])([\w.\-/]+\.(?:py|md|toml|json|js|ts))"
+                      r"(?=[:：]\s*\d|\s+(?:第\s*)?\d{1,5}(?:\s*[-–]\s*\d{1,5})?\s*行)")
+LOCAL_NAMES = None
+# 这三种说法都表明那句话不在声明「上游第 N 行」。上游锚点照样由 collect() 抽，
+# 这里只是不再要求写全目录：未核验的句子本来就承认没核，本机路径与本机文档不是上游文件。
+SKIP_MARKS = ("未核验", "未核实", "本机")
+
+
+def _local_names():
+    """本仓库自己的文件名。文档里 `sandbox.py:120`、`session_capability_refresh.py:88`
+    指的是我们自己的脚本，不是上游，探针不该管，也不该报「核不了」。
+    """
+    global LOCAL_NAMES
+    if LOCAL_NAMES is None:
+        LOCAL_NAMES = set()
+        for root, dirs, files in os.walk(REPO):
+            dirs[:] = [d for d in dirs if d not in (".git", "__pycache__", ".drift-cache")]
+            LOCAL_NAMES.update(files)
+    return LOCAL_NAMES
+
+
+def unresolvable(text):
+    """锚点写法自己把门禁挡住了：行号前面只写了文件名或半截目录。
+
+    2026-11-17 A734 的 N3。上游有 5 个 messages.py、6 个 query_service.py，`messages.py:22`
+    这种写法探针不可能猜对，以前 PATH_RE 匹配不到就整条跳过——上一轮 `config/network.py`
+    的行号被我改成 194 就是这么溜过去的。这里不猜映射表（猜错会报「对得上」，比不检更糟），
+    只把写法报出来，要人把目录写全。
+    以 / 或 ~ 开头的是本机路径，不是上游文件；写了「未核验」「本机」的行本来就不在声明
+    「上游第 N 行」，跳过。
+    """
+    out = []
+    for no, line in enumerate(text.split(NL), 1):
+        if any(k in line for k in SKIP_MARKS):
+            continue
+        # 反引号先抹平：行内代码写法 `cli.py` 105-113 行 里，那个反引号正好挡在
+        # 文件名与数字之间，不抹就看不见这一处锚点。路径串本身不含反引号，抹掉不改变取值。
+        plain = line.replace("`", " ")
+        full = set(m.group(1) for m in PATH_RE.finditer(plain))
+        for m in LOOSE_RE.finditer(plain):
+            p = m.group(1)
+            if p in full or p.startswith(("/", "~")) or p.rsplit("/", 1)[-1] in _local_names():
+                continue
+            out.append({"line": no, "path": p, "text": line.strip()[:120]})
+    return out
+
+
+PAIR_LOOKBACK = 46
+PAIR_RE = re.compile(r"([A-Za-z_][A-Za-z0-9_]{3,})[^A-Za-z0-9_]{0,12}?(?=\d)")
+
+
+def _pair_nums(seg, nums):
+    """给每个行号找紧邻它的标识符，找不到就不配（判据回退到整条的 token 列表）。
+
+    取法：在段内定位这个数字，往回看 PAIR_LOOKBACK 个字符，取最后一个像标识符的词。
+    `（def 156）` → def 是停用词，跳过；往前拿到 timer_interval。
+    """
+    out = {}
+    for n in nums:
+        idx = seg.find(":%d" % n)
+        if idx < 0:
+            idx = seg.find(str(n))
+        if idx < 0:
+            continue
+        back = seg[:idx][-PAIR_LOOKBACK:]
+        cands = [w for w in IDENT_RE.findall(back)
+                 if w.lower() not in STOPWORDS and not re.fullmatch(r"[0-9a-fA-F]{7,}", w)]
+        if cands:
+            out[n] = cands[-1]
+    return out
+
+
 def collect(text):
     """每个路径只看它自己之后、下一个路径之前的那段文字。
 
@@ -287,8 +406,15 @@ def collect(text):
                 continue
             toks = [x for x in IDENT_RE.findall(_route_literals(seg))
                     if x.lower() not in STOPWORDS and not re.fullmatch(r"[0-9a-fA-F]{7,}", x)]
-            anchors.append({"line": no, "path": m.group(1), "nums": nums[:10],
-                            "tokens": list(dict.fromkeys(toks))[:6],
+            nums = nums[:10]
+            uniq_toks = list(dict.fromkeys(toks))
+            anchors.append({"line": no, "path": m.group(1), "nums": nums,
+                            "tokens": uniq_toks[:6],
+                            # 每个行号配一个紧邻它的标识符：`timer_interval（def 156）` 里
+                            # 156 就该拿 timer_interval 核，而不是拿同一段里排在前面的别的符号。
+                            # 以前整条锚点共用一个 token 列表，一条写 8 个符号时只比前 6 个，
+                            # 第 7 个以后要么误报漂移、要么被前面的命中侥幸放过（本轮两处都踩到）。
+                            "pairs": _pair_nums(seg, nums),
                             "weak": not toks,
                             "text": line.strip()[:120]})
     seen, uniq = set(), []
@@ -297,7 +423,7 @@ def collect(text):
         # 以前只留第一条，第二条静默消失，「这行有没有被门禁看见」这个问题的答案就是错的。
         # 抓取成本不变：check() 对同一个文件本来就有缓存。
         k = (an["line"], an["path"], tuple(an["nums"]), an["weak"], an.get("symbol_only"),
-             tuple(an.get("syms", [])))
+             tuple(an.get("syms", [])), tuple(sorted((an.get("pairs") or {}).items())))
         if k not in seen:
             seen.add(k)
             uniq.append(an)
@@ -371,7 +497,8 @@ def check(anchors, head, get=None, get_raw=None, cache_dir=None):
             missing = []
             for s in an["syms"]:
                 parts = [p for p in s.split(".") if p]
-                if all(p in blob for p in parts):
+                # 点号写法逐段核定义：TaskAgentManager._brief 要类名与方法名各自以定义身份出现
+                if all(_definition_pattern(p).search(blob) for p in parts):
                     continue
                 missing.append(s)
             if missing:
@@ -392,25 +519,37 @@ def check(anchors, head, get=None, get_raw=None, cache_dir=None):
                 drift.append("%d 超出该文件行数(%d)" % (n, len(lines)))
             else:
                 present.append(n)
-        # 命中判据放宽两档：记录行本身，或紧邻的下一行（装饰器在 def 之前）
-        here = " ".join(lines[n - 1] for n in present)
-        here += " " + " ".join(lines[n] for n in present if n < len(lines))
-        # 2026-11-17 补一档收紧：记录行全落在空行上时，旧版会因为「空行在某个定义体内」判成对得上。
-        # 上游行号往上挪几位就能撞上空行，这种锚点其实已经漂了。本轮实测抓到三处这种假绿。
+        # 命中判据（2026-11-17 按 A734 的 N4 收紧）：逐个行号各判各的。
+        # 以前把这些行拼成一大段，整段里只要出现任意一个标识符就算全对。一条锚点挂 4 个 logs
+        # 路由、另一条挂 8 个 plugins 函数，其中 3 个漂了也不会报。
+        # 容差保留：记录行本身，或紧邻的下一行（装饰器在 def 之前），或落在该标识符的定义体内。
         blank_hit = bool(an["tokens"]) and _all_blank(lines, present)
-        miss = bool(an["tokens"]) and present and all(t not in here for t in an["tokens"])
-        if blank_hit or miss:
+        if blank_hit:
             moved = []
             for t in an["tokens"][:3]:
                 w = where_symbol(lines, t)
                 moved.append("%s→%s" % (t, "/".join(map(str, w)) if w else "未找到"))
-            if blank_hit:
-                drift.append("记录行在上游全是空行，锚点没落在写代码的那一行；" + ", ".join(moved))
-            else:
-                # 再退一档：记录行是否落在某个标识符的定义体内（区间锚、装饰器锚都属这种）
-                inside = [t for t in an["tokens"] if any(enclosing(lines, t, n) for n in present)]
-                if not inside:
-                    drift.append("记录行上没有本行任何标识符，也不在其定义体内；" + ", ".join(moved))
+            drift.append("记录行在上游全是空行，锚点没落在写代码的那一行；" + ", ".join(moved))
+        else:
+            for n in present:
+                win = lines[n - 1]
+                if n < len(lines):
+                    win += "\n" + lines[n]
+                # 判据用「整条的 token 列表 + 这一号配上的那个符号」。
+                # 只加不减：散文里紧邻的词未必是作者指的符号（`docstring`、`oauth` 这类），
+                # 拿它单独判会报一片假漂移；但它非空就把被 6 个上限挤掉的第 7 个符号请回来。
+                paired = (an.get("pairs") or {}).get(n)
+                cand = an["tokens"] + ([paired] if paired else [])
+                if any(t in win for t in cand):
+                    continue
+                if any(enclosing(lines, t, n) for t in cand):
+                    continue
+                moved = []
+                for t in cand[:3]:
+                    w = where_symbol(lines, t)
+                    moved.append("%s→%s" % (t, "/".join(map(str, w)) if w else "未找到"))
+                drift.append("%d 行上没有本锚点的标识符，也不在其定义体内；%s"
+                             % (n, ", ".join(moved)))
         rows.append(dict(an, status="drift" if drift else "ok", detail="; ".join(drift)))
     return rows
 
@@ -562,12 +701,152 @@ def self_test():
             st_plain = check([an_sym(["_brief"])], "cccc3333cccc",
                              get=lambda u: get_body(u, b_wo), cache_dir=c3)[0]["status"]
             cases.append((st_plain, "ok"))
+            # 这条专防「拼成一大段再找」：第 6 行与 handler 无关，但第 1 行有。
+            # 拼段判据会说对得上，逐行判据必须报漂移。
+            far_src = ("def handler():" + NL + "    x = 1" + NL + "    return x" + NL + NL
+                       + NL + "class Unrelated:" + NL)
+            far_b64 = base64.b64encode(far_src.encode("utf-8")).decode("ascii")
+            far_anchor = {"path": "plugin/a.py", "line": 1, "nums": [1, 7],
+                          "tokens": ["handler"], "weak": False}
+            far_status = check([far_anchor], "cafe0001cafe",
+                               get=lambda u: ({"content": far_b64}, None),
+                               cache_dir=tempfile.mkdtemp(prefix="drift-far-"))[0]["status"]
+            cases.append((far_status, "drift"))
+            md_case = _definition_pattern("LLM Result Field Filtering").search(
+                "# 顶部\n\n### LLM Result Field Filtering\n正文")
+            cases.append((bool(md_case), True))
+            cases.append((bool(_definition_pattern("Ok").search('__all__ = [\n    "Ok",\n]')), True))
+            cases.append((bool(_definition_pattern("Ok").search("正文里顺口提到 Ok 一句话")), False))
+            cases.append((bool(_definition_pattern("Ok").search(
+                "## Ok 与 Err" + NL + NL + "正文")), True))
+            # 不变量：每条锚点都必须产出一行结果。上面那次批量替换把 rows.append 吞掉时，
+            # 101 条锚点只剩 17 行结果，而每条结果各自仍是「对得上」——整体会读成绿灯。
+            _many = [an(n) for n in (1, 2, 3)] + [an_sym(["handler"]), an_sym(["nope_xyz"])]
+            _rows = check(_many, "f00df00df00d", get=get_inline, cache_dir=cache2)
+            cases.append((len(_rows) == len(_many) and len({id(r) for r in _rows}) == len(_many), True))
             shutil.rmtree(c3, ignore_errors=True)
             # collect() 必须真的把「文件:符号名」这种写法抽成锚点，否则上面这些都是死代码
             cases.append((bool([a for a in collect("见 plugin/x.py: handler_def 那一处")
                                 if a.get("symbol_only")]), True))
             cases.append((bool([a for a in collect("见 plugin/x.py（读于 sha）")
                                 if a.get("symbol_only")]), False))
+            # unresolvable()：只写文件名的锚点必须被报出来。上游 5 个 messages.py、6 个
+            # query_service.py，猜映射表会猜错，所以这里只报写法，让人把目录写全。
+            def un(s):
+                return [u["path"] for u in unresolvable(s.replace("\n", NL))]
+            cases.append((un("见 `health.py:20`"), ["health.py"]))
+            cases.append((un("见 `plugin/server/routes/health.py:20`"), []))
+            cases.append((un("见 `routes/plugins.py:42`"), ["routes/plugins.py"]))
+            cases.append((un("见 `config/network.py:193`"), []))
+            cases.append((un("见 `docs/plugins/cli.md:5`"), []))
+            cases.append((un("见 `scripts/profile_drift.py:13`"), []))
+            cases.append((un("未核验：`pyproject.toml:7` 的动态版本"), []))
+            cases.append((un("本机 `~/.workbuddy/settings.json:12`"), []))
+            cases.append((un("见 `plugin/core/registry.py:1` 与 `registry.py:2`"), ["registry.py"]))
+            cases.append((un("见 `plugin/a.py` 的 `handler`"), []))
+            # 「NNN-NNN 行」紧跟着文件名时也是锚点，反引号要抹平才看得见
+            cases.append((un("`cli.py` 105-113 行"), ["cli.py"]))
+            cases.append((un("`plugin/neko_plugin_cli/cli.py` 105-113 行"), []))
+            cases.append((un("`cli.py` 实测为 105-113 行"), []))
+            cases.append((un("本机蒸馏文档 `sdk-core.md` 第 20 行"), []))
+            # 行号与符号的配对：一条锚点里多个符号时，每个号各问各的
+            seg_two = ": timer_interval（def 156）、lifecycle（127）"
+            pr = _pair_nums(seg_two, [156, 127])
+            cases.append((pr.get(156), "timer_interval"))
+            cases.append((pr.get(127), "lifecycle"))
+            cases.append((_pair_nums("（读于 db81c1be0）", [81]), {}))
+            # 一条锚点里 7 个符号：tokens 只留前 6 个，第 7 个（omega）靠配对回到判据里。
+            # 没有配对时它会被挤掉，omega 那号就只能靠别的符号侥幸命中。
+            many_src = ("def alpha():" + NL + "def beta():" + NL + "def gamma():" + NL
+                        + "def delta():" + NL + "def epsilon():" + NL + "def zeta():" + NL
+                        + "def omega():" + NL)
+            many_b64 = base64.b64encode(many_src.encode("utf-8")).decode("ascii")
+            many_text = ("见 `plugin/a.py`: alpha（1）、beta（2）、gamma（3）、delta（4）、"
+                         "epsilon（5）、zeta（6）与 omega（7）`")
+            many_anchors = collect(many_text)
+            many_a = [x for x in many_anchors if x["path"] == "plugin/a.py"][0]
+            cases.append((len(many_a["tokens"]), 6))
+            cases.append((many_a["pairs"].get(7), "omega"))
+            cases.append((check([dict(many_a)], "ee11ee11ee11",
+                                get=lambda u: ({"content": many_b64}, None),
+                                cache_dir=tempfile.mkdtemp(prefix="drift-many-"))[0]["status"],
+                         "ok"))
+            # 配对只加不减：散文里紧邻的是 `docstring` 这种废词，也不该因此报漂移
+            doc_src = "def handler():" + NL + "    pass" + NL
+            doc_b64 = base64.b64encode(doc_src.encode("utf-8")).decode("ascii")
+            doc_an = {"path": "plugin/a.py", "line": 1, "nums": [1],
+                      "tokens": ["handler"], "weak": False, "pairs": {1: "docstring"}}
+            cases.append((check([doc_an], "ee22ee22ee22",
+                                get=lambda u: ({"content": doc_b64}, None),
+                                cache_dir=tempfile.mkdtemp(prefix="drift-doc-"))[0]["status"],
+                         "ok"))
+            # resolve_head 的三条分支：命中缓存、过期重取、取不到 sha。以前这段只能靠真网络演，
+            # 「当前 main」这句话到底从哪来，门禁里没有一个用例说过（终检 sweep 第 14 条）。
+            hc = tempfile.mkdtemp(prefix="drift-head-")
+            try:
+                calls = []
+
+                def get_head(url):
+                    calls.append(url)
+                    return {"sha": "cafe0000cafe", "default_branch": "trunk"}, None
+
+                def get_never(url):
+                    raise AssertionError("缓存还新鲜时不该发请求：" + url)
+                with open(os.path.join(hc, "head.txt"), "w", encoding="utf-8") as f:
+                    f.write("deadbeefdead\n")
+                cases.append((resolve_head(True, 3600, cache_dir=hc, get=get_never),
+                              ("deadbeefdead", True)))
+                got_fresh = resolve_head(True, 3600, cache_dir=tempfile.mkdtemp(prefix="drift-head2-"),
+                                         get=get_head)
+                cases.append((got_fresh, ("cafe0000cafe", False)))
+                cases.append((any("/commits/trunk" in u for u in calls), True))
+                # 缓存过期（max_age=-1）→ 必须重取，不能拿旧 sha 说「当前 main」
+                got_old = resolve_head(True, -1, cache_dir=hc, get=get_head)
+                cases.append((got_old, ("cafe0000cafe", False)))
+                got_none = resolve_head(False, 3600, cache_dir=tempfile.mkdtemp(prefix="drift-head3-"),
+                                        get=lambda u: (None, "limited"))
+                cases.append((got_none[0], ""))
+                cases.append((got_none[1], "limited"))
+                shutil.rmtree(hc, ignore_errors=True)
+            except OSError as e:
+                cases.append((str(e), ""))
+            # main() 的退出码接线也要演：argv 现在可注入。api 与 CACHE_DIR 临时换掉，
+            # 自检照旧不碰网络，也不往仓库缓存里写东西。
+            _real_api, _real_cache = api, CACHE_DIR
+            mp = tempfile.mkdtemp(prefix="drift-main-")
+            try:
+                globals()["CACHE_DIR"] = mp
+                src_b64 = base64.b64encode(("def handler():" + NL + "    x = 1" + NL).encode(
+                    "utf-8")).decode("ascii")
+
+                def get_main(url):
+                    if "/contents/" in url:
+                        return {"content": src_b64}, None
+                    return {"sha": "cafe0000cafe", "default_branch": "main"}, None
+                globals()["api"] = get_main
+                prof = os.path.join(mp, "p.md")
+
+                def run(text, strict=True):
+                    with open(prof, "w", encoding="utf-8") as f:
+                        f.write(text)
+                    # 吞掉报告：自检的输出只要一行结论，main() 的表格别混进来
+                    with contextlib.redirect_stdout(io.StringIO()):
+                        return main(["--profile", prof] + (["--strict"] if strict else []))
+                cases.append((run("见 `plugin/a.py:1` 的 `handler`" + NL), 0))
+                # 第 2 行落在 handler 的定义体内，那是合规写法；第 9 行超出文件长度才是漂移
+                cases.append((run("见 `plugin/a.py:2` 的 `handler`" + NL), 0))
+                cases.append((run("见 `plugin/a.py:9` 的 `handler`" + NL), 1))
+                cases.append((run("见 `health.py:20`" + NL), 1))
+                cases.append((run("见 `health.py:20`" + NL, strict=False), 0))
+                globals()["api"] = lambda u: (None, "limited")
+                # 缓存也要一起换掉：上一例已经把 head 与正文写进 mp，不换就命中缓存、测不到退 2
+                globals()["CACHE_DIR"] = tempfile.mkdtemp(prefix="drift-cold-")
+                cases.append((run("见 `plugin/a.py:1` 的 `handler`" + NL), 2))
+            except OSError as e:
+                cases.append((str(e), ""))
+            finally:
+                globals()["api"], globals()["CACHE_DIR"] = _real_api, _real_cache
+                shutil.rmtree(mp, ignore_errors=True)
         finally:
             shutil.rmtree(cache2, ignore_errors=True)
     finally:
@@ -579,7 +858,7 @@ def self_test():
     return 1 if bad else 0
 
 
-def main():
+def main(argv=None):
     ap = argparse.ArgumentParser(description="profile 锚点漂移探针")
     ap.add_argument("--profile", default=DEFAULT_PROFILE)
     ap.add_argument("--json", action="store_true")
@@ -587,19 +866,25 @@ def main():
                     help="有漂移或有 weak 锚点就退出 1（默认只报告）")
     ap.add_argument("--fresh", action="store_true", help="忽略缓存重拉")
     ap.add_argument("--self-test", action="store_true", help="只跑自检，不碰网络")
-    a = ap.parse_args()
+    a = ap.parse_args(argv)
 
     if a.self_test:
         return self_test()
-    if not os.path.isfile(a.profile):
-        print("用法错误: 找不到 profile:", a.profile)
-        return 2
+    paths = PROFILES if a.profile == DEFAULT_PROFILE else [a.profile]
+    for p in paths:
+        if not os.path.isfile(p):
+            print("用法错误: 找不到 profile:", p)
+            return 2
     if a.fresh and os.path.isdir(CACHE_DIR):
         for fn in os.listdir(CACHE_DIR):
             os.remove(os.path.join(CACHE_DIR, fn))
 
-    text = open(a.profile, encoding="utf-8-sig").read().replace("\r\n", NL)
-    anchors = collect(text)
+    anchors, unres = [], []
+    for p in paths:
+        text = open(p, encoding="utf-8-sig").read().replace("\r\n", NL)
+        src = os.path.relpath(p, REPO).replace("\\", "/")
+        anchors += [dict(x, src=src) for x in collect(text)]
+        unres += [dict(x, src=src) for x in unresolvable(text)]
 
     head, from_cache = resolve_head(use_cache=not a.fresh)
     if not head:
@@ -615,21 +900,31 @@ def main():
         print(json.dumps({"upstream": UPSTREAM, "head": head, "head_from_cache": from_cache,
                           "anchors": len(rows), "ok": ok, "weak": len(weak),
                           "unreachable": len(unreachable), "drift": drift,
+                          "unresolvable": unres,
                           "weak_rows": [{"line": r["line"], "path": r["path"],
                                          "nums": r["nums"]} for r in weak]},
                          ensure_ascii=False, indent=1))
     else:
         print("上游 %s，当前 main = %s%s" % (UPSTREAM, head[:9],
               "（取自 %d 小时内的缓存，--fresh 可强制重取）" % (HEAD_TTL // 3600) if from_cache else ""))
-        print("锚点核对 %d 条：对得上 %d，漂移 %d，核不了 %d，取不到 %d"
-              % (len(rows), ok, len(drift), len(weak), len(unreachable)))
+        print("核对 %s：锚点 %d 条，对得上 %d，漂移 %d，核不了 %d，取不到 %d；写法核不了 %d 条"
+              % ("、".join(os.path.basename(p) for p in paths), len(rows), ok, len(drift),
+                 len(weak), len(unreachable), len(unres)))
         for r in (drift + unreachable + weak)[:30]:
-            print("  [%s] profile 第 %d 行  %s  记录号 %s\n        %s"
-                  % (r["status"], r["line"], r["path"], "/".join(map(str, r["nums"][:6])), r["detail"]))
+            print("  [%s] %s 第 %d 行  %s  记录号 %s\n        %s"
+                  % (r["status"], r.get("src", "profile"), r["line"], r["path"],
+                     "/".join(map(str, r["nums"][:6])), r["detail"]))
+        for u in unres[:20]:
+            print("  [写法核不了] %s 第 %d 行  %s:NN——行号前要把上游目录写全，"
+                  "同名文件上游不止一个" % (u["src"], u["line"], u["path"]))
         if len(drift) + len(unreachable) + len(weak) > 30:
             print("  ...其余 %d 条用 --json 查看" % (len(drift) + len(unreachable) + len(weak) - 30))
         if unreachable:
             print("结论：%d 条锚点本次无法判定（取不到上游，不算漂移）。" % len(unreachable))
+        elif unres:
+            print("结论：%d 处锚点只写了文件名。上游同名文件不止一个，探针不知道是哪一个，"
+                  "这几条完全在门禁之外。把目录写全（`plugin/server/routes/plugins.py:42`）。"
+                  % len(unres))
         elif weak:
             print("结论：%d 条锚点没有可比对的符号，只有路径与行号，这几条不算核过。"
                   "把符号名补进 profile 那句里，探针才管得住它。" % len(weak))
@@ -640,7 +935,8 @@ def main():
         return 2
     # 2026-11-17：CI 这一步已从「只报」改成阻塞。weak 也要算失败——它的意思是我们自己的锚点没写符号，
     # 上游怎么变都验不出来。让它静默通过等于在门禁里留一格假绿。
-    return 1 if (a.strict and (drift or weak)) else 0
+    # unres（写法核不了）同理：探针看不见的那一条，才是行号写错还能过关的那一条。
+    return 1 if (a.strict and (drift or weak or unres)) else 0
 
 
 if __name__ == "__main__":

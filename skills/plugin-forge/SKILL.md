@@ -110,7 +110,7 @@ metadata:
 - 无论哪种形态：宪法、契约门禁、证据分级、验收清单**完全一致**。Codex 形态的落盘与机器校验命令写在
   `codex/prompts/plugin-forge.md` 第 4 步与第 8 步（准奏落盘 + `check_contract_approval.py`，
   安全分诊 `security_audit.py`）。
-- 路径约定：成员人设文档里的 `${FORGE_HOME}` = 本 skill 的安装目录（zcode `~/.zcode/skills/plugin-forge`；Claude Code 为插件缓存内的 plugin-forge 目录；Codex `~/.codex/skills/plugin-forge`）。它是文档占位符，执行命令前先换成实际目录（或 `export FORGE_HOME=…`）；文档内不再写死宿主路径。
+- 路径约定：`${FORGE_HOME}` = **装着 `scripts/check_contract_approval.py` 的那个 plugin-forge 目录**，也就是 skill 目录，不是仓库根、也不是插件包的根。Claude Code 从市场安装时，插件根下面还有一层 `skills/plugin-forge/`，指错一层就找不到脚本（仓库根的 `scripts/` 里只有探针与花名册工具）。执行命令前先自检一句：`test -f "$FORGE_HOME/scripts/check_contract_approval.py" && echo 对`。zcode 为 `~/.zcode/skills/plugin-forge`，Codex 为 `~/.codex/skills/plugin-forge`。它是文档占位符，执行命令前先换成实际目录（或 `export FORGE_HOME=…`）；文档内不再写死宿主路径。
 - 版本号只认 `.claude-plugin/plugin.json` 的 `version`（插件发布号）。本文件与 `agents/*.md` 不带版本号，避免两处漂移。
 
 ## 6. 交付前终检（闸门快照）
