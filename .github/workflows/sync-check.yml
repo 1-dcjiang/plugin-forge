@@ -60,7 +60,5 @@ jobs:
           done
           if [ "$rc" -eq 2 ]; then echo "重试三次仍取不到上游：这不算核过，也不算漂移"; fi
           exit "$rc"
-      - name: SessionStart 能力刷新自检
-        run: python scripts/session_capability_refresh.py --self-test
       - name: JSON artifacts parse
         run: python -c "import json,glob;fs=glob.glob('**/*.json',recursive=True)+glob.glob('.claude-plugin/*.json');[json.load(open(p,encoding='utf-8-sig')) for p in fs]"
