@@ -22,7 +22,9 @@
 匿名限额是一小时 60 次。CI 里给这一步传 GITHUB_TOKEN，否则跑不了几条就限流。
 限流与断网不算漂移：那些锚点报 unreachable，脚本退 2，不冒充「上游删了文件」的结论。
 
-退出码：0 报告完成；--strict 且有漂移时 1；有锚点取不到上游时 2（包括根本取不到 sha）。
+退出码：0 报告完成；--strict 且有漂移、或有锚点缺符号可比对（weak）时退 1；
+有锚点取不到上游时 2（包括根本取不到 sha）。weak 也算失败是 2026-11-17 改的：
+那句「没有可比对的符号」是我们自己的写法问题，让它静默通过就是在门禁里留一格假绿。
 """
 import argparse
 import base64
@@ -39,8 +41,13 @@ HEAD_TTL = 24 * 3600
 UPSTREAM = "Project-N-E-K-O/N.E.K.O"
 NL = chr(10)
 
+# 前缀白名单。2026-11-17 补 utils / brain：profile 早就在引
+# utils/config_manager/storage_roots.py:367-373 这类锚点，白名单不含 utils 时探针直接看不见它，
+# 于是「71 条全对」这句话漏掉了真在用的锚点。
+# 不要加 scripts/：那是我们自己的仓的路径，上游没有对应文件，加进去会让探针把
+# 本文提到的 `scripts/profile_drift.py` 当成上游锚点，报出一条假 404。
 PATH_RE = re.compile(r"(?<![\w/.\-])((?:plugin|app|config|docs|nekoclaw|memory|launcher_core|"
-                     r"main_logic|\.agent)/[\w./\-]*\.(?:py|md|toml|json|js|ts))")
+                     r"main_logic|\.agent|utils|brain)/[\w./\-]*\.(?:py|md|toml|json|js|ts))")
 IDENT_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]{3,}")
 # 认这四种形状：NNN 行、:NNN、（NNN 或（NNN/NNN、带标签的「id 212、name 213」。
 # issue 号带 #、章节号带 §，都不会被吃进来。第四种必须跟在短标签后并以顿号或括号收尾，
@@ -125,17 +132,57 @@ def body_state(data):
     return None if data.get("content") else "big"
 
 
-def upstream_lines(path, head):
-    """返回 (行列表, 故障)。故障非 None 时不能据此说上游没有该文件。"""
-    os.makedirs(CACHE_DIR, exist_ok=True)
-    fn = os.path.join(CACHE_DIR, "%s.%s.txt" % (head[:8], path.replace("/", "__")))
+def api_bytes(url):
+    """取原始正文。Contents API 对 1MB 以上的文件不给正文，这类文件只能走 raw 端点。
+
+    2026-11-17 加：CI 里这一步已经改成阻塞，`plugin/settings.py`（1.1MB）以前会算成
+    unreachable 并退 2，等于探针天天红却什么都没说。raw 端点没有大小门槛。
+    """
+    import urllib.error
+    import urllib.request
+    req = urllib.request.Request(url, headers={
+        "Accept": "text/plain",
+        "User-Agent": "plugin-forge-profile-drift-probe",
+    })
+    tok = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
+    if tok:
+        req.add_header("Authorization", "Bearer " + tok)
+    try:
+        with urllib.request.urlopen(req, timeout=60) as r:
+            return r.read(), None
+    except urllib.error.HTTPError as e:
+        return None, classify(e.code)
+    except (ValueError, TimeoutError, OSError):
+        return None, "net"
+
+
+def upstream_lines(path, head, get=None, get_raw=None, cache_dir=None):
+    """返回 (行列表, 故障)。故障非 None 时不能据此说上游没有该文件。
+
+    cache_dir 可注入，自检用它把夹具写进临时目录，不污染仓库外的 .drift-cache。
+    """
+    get = get or api
+    get_raw = get_raw or api_bytes
+    cache_dir = cache_dir or CACHE_DIR
+    os.makedirs(cache_dir, exist_ok=True)
+    fn = os.path.join(cache_dir, "%s.%s.txt" % (head[:8], path.replace("/", "__")))
     if os.path.isfile(fn):
         with open(fn, encoding="utf-8", errors="replace") as f:
             return f.read().split(NL), None
-    data, err = api("https://api.github.com/repos/%s/contents/%s?ref=%s" % (UPSTREAM, path, head))
+    data, err = get("https://api.github.com/repos/%s/contents/%s?ref=%s" % (UPSTREAM, path, head))
     if err:
         return None, err
     state = body_state(data)
+    if state == "big":
+        raw, rerr = get_raw("https://raw.githubusercontent.com/%s/%s/%s" % (UPSTREAM, head, path))
+        if rerr:
+            return None, rerr
+        if raw is None:
+            return None, "big"
+        text = raw.decode("utf-8", "replace")
+        with open(fn, "w", encoding="utf-8", newline=NL) as f:
+            f.write(text)
+        return text.split(NL), None
     if state:
         return None, state
     try:
@@ -162,6 +209,17 @@ def window_nums(seg):
     return sorted(set(out))
 
 
+def _route_literals(seg):
+    """把反引号里的路由字面量去掉，只留下真正的代码符号。
+
+    `GET /plugin/metrics*` 这种写法里 IDENT_RE 会抓到 metrics，而它不是代码符号，是路由名。
+    2026-11-17 实测：一行里连写四个 `xxx.py:NN` 时，这种假符号会被安到前一个路径头上，
+    探针报「记录行上没有本行任何标识符」的假漂移。带 / 的那段整个摘掉；不带 / 的
+    `health()`、`PluginPageMutationGuardedRoute` 这些照旧留下。
+    """
+    return re.sub(r"`[^`]*?/[^`]*?`", " ", seg)
+
+
 def collect(text):
     """每个路径只看它自己之后、下一个路径之前的那段文字。
 
@@ -180,7 +238,7 @@ def collect(text):
             nums = window_nums(seg)
             if not nums:
                 continue
-            toks = [x for x in IDENT_RE.findall(seg)
+            toks = [x for x in IDENT_RE.findall(_route_literals(seg))
                     if x.lower() not in STOPWORDS and not re.fullmatch(r"[0-9a-fA-F]{7,}", x)]
             anchors.append({"line": no, "path": m.group(1), "nums": nums[:10],
                             "tokens": list(dict.fromkeys(toks))[:6],
@@ -224,16 +282,26 @@ def enclosing(lines, token, n):
     return False
 
 
-def check(anchors, head):
+def _all_blank(lines, present):
+    """记录的那些行号是不是全是空行。全空就不能说「这行写着那个标识符」。"""
+    return bool(present) and all(not lines[n - 1].strip() for n in present)
+
+
+def check(anchors, head, get=None, get_raw=None, cache_dir=None):
     """逐条核对锚点。状态五种：ok 对得上，drift 行号漂了，gone 上游 404（真结论），
     unreachable 取不到（限流或断网，不是结论），weak 这句话没有符号可比对（探针管不了，
     也不算核过）。把 gone 与 unreachable 混在一起，一次限流就会被读成「上游把文件删了」。
-    把 weak 算成 ok，就回到旧版的假绿：锚点只写了路径与行号时，谁都没在核它。"""
+    把 weak 算成 ok，就回到旧版的假绿：锚点只写了路径与行号时，谁都没在核它。
+
+    get / get_raw / cache_dir 透传给 upstream_lines，自检因此能离线跑满 check 的判据本身
+    （2026-11-17：以前自检只测 _all_blank 这个纯函数，接线断了也照样绿）。
+    """
     file_cache, rows = {}, []
     for an in anchors:
         path = an["path"]
         if path not in file_cache:
-            file_cache[path] = upstream_lines(path, head)
+            file_cache[path] = upstream_lines(path, head, get=get, get_raw=get_raw,
+                                              cache_dir=cache_dir)
         lines, err = file_cache[path]
         if err == "missing":
             rows.append(dict(an, status="gone", detail="上游 404：该文件已改名或已删除"))
@@ -257,15 +325,22 @@ def check(anchors, head):
         # 命中判据放宽两档：记录行本身，或紧邻的下一行（装饰器在 def 之前）
         here = " ".join(lines[n - 1] for n in present)
         here += " " + " ".join(lines[n] for n in present if n < len(lines))
-        if an["tokens"] and present and all(t not in here for t in an["tokens"]):
-            # 再退一档：记录行是否落在某个标识符的定义体内（区间锚、装饰器锚都属这种）
-            inside = [t for t in an["tokens"] if any(enclosing(lines, t, n) for n in present)]
-            if not inside:
-                moved = []
-                for t in an["tokens"][:3]:
-                    w = where_symbol(lines, t)
-                    moved.append("%s→%s" % (t, "/".join(map(str, w)) if w else "未找到"))
-                drift.append("记录行上没有本行任何标识符，也不在其定义体内；" + ", ".join(moved))
+        # 2026-11-17 补一档收紧：记录行全落在空行上时，旧版会因为「空行在某个定义体内」判成对得上。
+        # 上游行号往上挪几位就能撞上空行，这种锚点其实已经漂了。本轮实测抓到三处这种假绿。
+        blank_hit = bool(an["tokens"]) and _all_blank(lines, present)
+        miss = bool(an["tokens"]) and present and all(t not in here for t in an["tokens"])
+        if blank_hit or miss:
+            moved = []
+            for t in an["tokens"][:3]:
+                w = where_symbol(lines, t)
+                moved.append("%s→%s" % (t, "/".join(map(str, w)) if w else "未找到"))
+            if blank_hit:
+                drift.append("记录行在上游全是空行，锚点没落在写代码的那一行；" + ", ".join(moved))
+            else:
+                # 再退一档：记录行是否落在某个标识符的定义体内（区间锚、装饰器锚都属这种）
+                inside = [t for t in an["tokens"] if any(enclosing(lines, t, n) for n in present)]
+                if not inside:
+                    drift.append("记录行上没有本行任何标识符，也不在其定义体内；" + ", ".join(moved))
         rows.append(dict(an, status="drift" if drift else "ok", detail="; ".join(drift)))
     return rows
 
@@ -308,7 +383,77 @@ def self_test():
         (enclosing(["def handler():", "    x = 1", "    return x"], "handler", 3), True),
         (enclosing(["export class Panel extends Base {", "  onMount() {", "    const x = 1"],
                    "Panel", 3), True),
+        # 2026-11-17 收紧：行号撞上空行时必须算漂，哪怕它落在某个定义体内
+        (_all_blank(["def handler():", "", "    pass"], [2]), True),
+        (_all_blank(["def handler():", "    x = 1"], [2]), False),
+        (_all_blank(["def handler():", "    x = 1"], []), False),
+        (_all_blank(["a", "b", "c"], [2, 3]), False),
     ]
+    # 2026-11-17 补：1MB 以上的文件必须走 raw 端点拿正文。Contents API 对这种文件返回 200
+    # 但不带 content，旧版把它算成「取不到」，探针会天天退 2 却不给出任何结论。
+    import shutil
+    import tempfile
+    cache = tempfile.mkdtemp(prefix="drift-self-")
+    seen = []
+    try:
+        def contents_big(url):
+            seen.append(("contents", url))
+            return {"content": None, "size": 1100000}, None       # 200 无正文 = 文件过大
+
+        def raw_ok(url):
+            seen.append(("raw", url))
+            return ("handler: int = 1" + NL + "value = 2").encode("utf-8"), None
+
+        want_lines = ["handler: int = 1", "value = 2"]
+        lines, err = upstream_lines("plugin/settings.py", "deadbeefdeadbeef",
+                                    get=contents_big, get_raw=raw_ok, cache_dir=cache)
+        cases.append(((err, lines), (None, want_lines)))
+        cases.append((seen[1][1],
+                      "https://raw.githubusercontent.com/%s/deadbeefdeadbeef/plugin/settings.py"
+                      % UPSTREAM))
+        # 第二次应当命中缓存：再取就一个网络调用都不发
+        calls = []
+        lines2, err2 = upstream_lines("plugin/settings.py", "deadbeefdeadbeef",
+                                      get=lambda u: calls.append(u) or ({}, None),
+                                      get_raw=lambda u: calls.append(u) or (None, None),
+                                      cache_dir=cache)
+        cases.append(((len(calls), err2, lines2), (0, None, want_lines)))
+        # raw 自己失败时按故障类型分账：断网不算「上游删了文件」，404 才算
+        lines3, err3 = upstream_lines("plugin/big.py", "cafe1234cafe1234", get=contents_big,
+                                      get_raw=lambda u: (None, "net"), cache_dir=cache)
+        cases.append(((err3, lines3), ("net", None)))
+        lines4, err4 = upstream_lines("plugin/gone.py", "cafe1234cafe1234", get=contents_big,
+                                      get_raw=lambda u: (None, "missing"), cache_dir=cache)
+        cases.append(((err4, lines4), ("missing", None)))
+        # check() 层的判据。光测 _all_blank 这个纯函数不够：接线断了照样绿。
+        fake_src = ("def handler():" + NL + "    x = 1" + NL + NL + "    return x" + NL)
+        b64 = base64.b64encode(fake_src.encode("utf-8")).decode("ascii")
+
+        def get_inline(url):
+            return {"content": b64}, None
+
+        def an(n):
+            return {"path": "plugin/a.py", "line": 1, "nums": [n],
+                    "tokens": ["handler"], "weak": False}
+
+        cache2 = tempfile.mkdtemp(prefix="drift-check-")
+        try:
+            for n, want_status in ((3, "drift"), (1, "ok"), (2, "ok")):
+                got_status = check([an(n)], "f00df00df00d",
+                                   get=get_inline, cache_dir=cache2)[0]["status"]
+                cases.append((got_status, want_status))
+            # 大文件也要能过 check：Contents 不给正文时由 raw 补上，判据照旧
+            def get_big_no_body(url):
+                return {"content": None}, None
+
+            got_big = check([an(1)], "beefbeefbeef", get=get_big_no_body,
+                            get_raw=lambda u: (fake_src.encode("utf-8"), None),
+                            cache_dir=tempfile.mkdtemp(prefix="drift-big-"))[0]["status"]
+            cases.append((got_big, "ok"))
+        finally:
+            shutil.rmtree(cache2, ignore_errors=True)
+    finally:
+        shutil.rmtree(cache, ignore_errors=True)
     bad = [(i, got, want) for i, (got, want) in enumerate(cases) if got != want]
     for i, got, want in bad:
         print("  自检失败 #%d: 得到 %r 期望 %r" % (i, got, want))
@@ -320,7 +465,8 @@ def main():
     ap = argparse.ArgumentParser(description="profile 锚点漂移探针")
     ap.add_argument("--profile", default=DEFAULT_PROFILE)
     ap.add_argument("--json", action="store_true")
-    ap.add_argument("--strict", action="store_true", help="有漂移就退出 1（默认只报告）")
+    ap.add_argument("--strict", action="store_true",
+                    help="有漂移或有 weak 锚点就退出 1（默认只报告）")
     ap.add_argument("--fresh", action="store_true", help="忽略缓存重拉")
     ap.add_argument("--self-test", action="store_true", help="只跑自检，不碰网络")
     a = ap.parse_args()
@@ -374,7 +520,9 @@ def main():
                             "行号已漂。按 detail 更新行号，或把锚点降成「只写标识符 + 读于 <sha>」。"))
     if unreachable:
         return 2
-    return 1 if (a.strict and drift) else 0
+    # 2026-11-17：CI 这一步已从「只报」改成阻塞。weak 也要算失败——它的意思是我们自己的锚点没写符号，
+    # 上游怎么变都验不出来。让它静默通过等于在门禁里留一格假绿。
+    return 1 if (a.strict and (drift or weak)) else 0
 
 
 if __name__ == "__main__":
