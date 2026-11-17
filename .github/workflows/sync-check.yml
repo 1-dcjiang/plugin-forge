@@ -42,16 +42,13 @@ jobs:
         run: python scripts/profile_drift.py --self-test
       - name: SessionStart 能力刷新自检
         run: python scripts/session_capability_refresh.py --self-test
-      - name: 对本仓库跑一次真实安全扫描
-        env:
-          AUDIT_ALLOW: skills/plugin-forge/scripts/security_audit.py,skills/neko-plugin-sandbox/scripts/sandbox.py,scripts/profile_drift.py
-        run: python skills/plugin-forge/scripts/security_audit.py . --allow "$AUDIT_ALLOW"
-      - name: '审计两个旗标转为阻塞（盲区 / 占位符严格档，作者 2026-11-17 定：warnings 当 errors）'
-        env:
-          AUDIT_ALLOW: skills/plugin-forge/scripts/security_audit.py,skills/neko-plugin-sandbox/scripts/sandbox.py,scripts/profile_drift.py
+      - name: 对本仓库跑一次真实安全扫描（裸扫，不加 --allow）
+        run: python skills/plugin-forge/scripts/security_audit.py .
+      - name: '审计三个旗标转为阻塞（盲区 / 占位符严格档 / 畸形点位声明；作者 2026-11-17 定：warnings 当 errors）'
         run: |
-          python skills/plugin-forge/scripts/security_audit.py . --allow "$AUDIT_ALLOW" --fail-unclear
-          python skills/plugin-forge/scripts/security_audit.py . --allow "$AUDIT_ALLOW" --strict-placeholder
+          python skills/plugin-forge/scripts/security_audit.py . --fail-unclear
+          python skills/plugin-forge/scripts/security_audit.py . --strict-placeholder
+          python skills/plugin-forge/scripts/security_audit.py . --strict-declared
       - name: 'profile 锚点漂移探针（阻塞：行号漂即红；取不到上游重试三次）'
         env:
           GITHUB_TOKEN: ${{ github.token }}

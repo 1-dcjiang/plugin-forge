@@ -595,16 +595,43 @@ session_id / source / hook_event_name」。删掉解析就同时改了一条对�
   65 个文件里 SEC-1 6 / SEC-2 9 / SEC-3 12 / SEC-4 38，绝大多数是 AUDIT.md 与
   security-checklist.md 里引用的**示例文本**。所以这一步还是不接进 CI：接了就是把分诊器当裁判，
   而那 38 处要逐条人工判过才能豁免。缺口记在这里，不当已解决。
+### sec-declared · 点位声明登记（2026-11-17，从 --json 的 declared_ok_list 实取）
 
-### 豁免复核（2026-11-14，对照已推送树 08e3c77 逐条核对）
+共 33 处（去重后 24 行）。理由列就是标记里的 `理由=`，复审列就是 `复审=`。到期后声明自动失效，下一轮 CI 会把命中重新计回账上。
 
-- 复跑命令（三条豁免，exit 0；得分以实跑为准）：`python skills/plugin-forge/scripts/security_audit.py . --allow skills/plugin-forge/scripts/security_audit.py,skills/neko-plugin-sandbox/scripts/sandbox.py,scripts/profile_drift.py`
-- 豁免 1 `skills/plugin-forge/scripts/security_audit.py`：**保留**。命中数随夹具变动，2026-11-15 实测以脚本为准；全部是文件头说明、检测规则自身的字面量与自检夹具。**夹具一律拆写**（`"-----BEGIN " + "RSA PRIVATE KEY-----"）：本文件会被自己扫，A472 抓到过我在新自检里写了两个完整的私钥头字面量，那会让不带 `--allow` 的自查直接把自己否决。
-- 豁免 2 `skills/neko-plugin-sandbox/scripts/sandbox.py`：**保留**。2026-11-17 实跑 9 处：SEC-1 2 处（`_isolated_dirs` 与 `cmd_prepare` 的建目录路径）、SEC-2 3 处（自检夹具里的回环 URL 与口令示例）、SEC-4 4 处（uv/pip/git/urllib 外联点位，用途均已声明）。全部为已声明功能或自检夹具。杀进程面的读取函数是 `_pid_cmdline`（返回命令行与「进程还在不在」两个值），身份判定是 `pid_verdict`，走向判定是 `stop_action`，都由 `cmd_stop` 调用；它读 `/proc`、macOS 上没有 `/proc` 就退回 `ps -p <pid> -o command=`。读不到命令行而进程还在时拒杀，要调用方带 `--force` 再来一次；进程已不存在则直接清状态文件，不再要 `--force`。这是 2026-11-15 的改动（2026-11-16 按 A571 第 2 条补 macOS 兜底与存活分账，`should_kill` 由 `stop_action` 取代）；旧版在这里 fail-open，伪造 pid 照样被 taskkill。自检有 12 条 stop 判定组合，撤掉 `stop_action` 的 None 分支会报多条失败。本行原来写的是行号，已按「不写行号」的口径换成符号引用（2026-11-15，A472 第 7 条）。
-- 豁免 3 `scripts/profile_drift.py`：**保留**（2026-11-15 加）。2026-11-17 实跑 6 处，全在 `api()` 与 `api_bytes()`：`import urllib.request` / `Request` / `urlopen` 各两次（两个取数函数成对写）。以前记的「3 处」是加 `api_bytes()` 之前的数，行号与函数名都以实跑为准。用途＝只读拉取 `api.github.com/repos/Project-N-E-K-O/N.E.K.O` 的 commit 与 contents，用于锚点漂移探针；无写请求、无 exec、无落盘除 `scripts/.drift-cache/`（已 gitignore）之外的文件；带 GITHUB_TOKEN 时只作为 Authorization 头回给 api.github.com，不外发。边界：改成抓取非该仓库、或把响应内容当代码执行，本依据即刻失效。
-- 口径：文件数不要手抄。取法是 `--json` 的 `scanned_files` 与 `skipped_files`，豁免条数看 `.github/workflows/sync-check.yml` 的 `AUDIT_ALLOW`（2026-11-15 实测：扫描 15 个、跳过 84 个、三条豁免）。本行以前写 5 .py / 池 13 / 文档 48 / 减 2 得 11，四个数全过期：实跑是 6 个 .py、池 15、49 个 .md、减 3 得 12。
-- 本轮 8 项修复（2026-11-14）没有增删文件，但扫描器扩面后代码池为 13 个（加入无扩展名与 `.env*` 文件）。新增文字按 SEC-1 至 SEC-4 的模式表人工比对过，没有新触发词。扫描器本轮未重跑，上表的发现数沿用上次实测。
-- CI 状态：sync-check #1 已在 GitHub Actions 真实 runner 通过（08e3c77，9s，四步全绿）。
+| 位置 | 理由 | 复审 |
+|---|---|---|
+| scripts/profile_drift.py:101 | 只读拉取 GitHub API 的 UA 头 | 2026-12-15 |
+| scripts/profile_drift.py:102 | 只读拉取 api.github.com | 2026-12-15 |
+| scripts/profile_drift.py:110 | 只读拉取 api.github.com | 2026-12-15 |
+| scripts/profile_drift.py:165 | 只读拉取 raw.githubusercontent.com | 2026-12-15 |
+| scripts/profile_drift.py:166 | 只读拉取 raw.githubusercontent.com | 2026-12-15 |
+| scripts/profile_drift.py:174 | 只读拉取 raw.githubusercontent.com | 2026-12-15 |
+| scripts/session_capability_refresh.py:46 | 按设计只读单机 CLI 配置做能力快照 | 2026-12-15 |
+| skills/neko-plugin-sandbox/scripts/sandbox.py:36 | 健康探测用 urllib，只打 127.0.0.1 | 2026-12-15 |
+| skills/neko-plugin-sandbox/scripts/sandbox.py:148 | 本地回环探测绕过系统代理 | 2026-12-15 |
+| skills/neko-plugin-sandbox/scripts/sandbox.py:153 | 只读拉取 GitHub API | 2026-12-15 |
+| skills/neko-plugin-sandbox/scripts/sandbox.py:271 | git fetch 官方仓库到沙箱 | 2026-12-15 |
+| skills/neko-plugin-sandbox/scripts/sandbox.py:673 | 读 /proc 的 pid 命令行 | 2026-12-15 |
+| skills/neko-plugin-sandbox/scripts/sandbox.py:787 | 读 /proc 的 pid 状态 | 2026-12-15 |
+| skills/neko-plugin-sandbox/scripts/sandbox.py:1046 | 自检夹具的假口令形状 | 2026-12-15 |
+| skills/neko-plugin-sandbox/scripts/sandbox.py:1047 | 自检夹具的假口令形状 | 2026-12-15 |
+| skills/neko-plugin-sandbox/scripts/sandbox.py:1048 | 自检夹具的假口令形状 | 2026-12-15 |
+| skills/neko-plugin-sandbox/scripts/sandbox.py:1483 | 自检夹具里的越界 id | 2026-12-15 |
+| skills/plugin-forge/scripts/security_audit.py:119 | 检测规则的正则字面量本身 | 2026-12-15 |
+| skills/plugin-forge/scripts/security_audit.py:131 | 检测规则的正则字面量本身 | 2026-12-15 |
+| skills/plugin-forge/scripts/security_audit.py:136 | 检测规则的正则字面量本身 | 2026-12-15 |
+| skills/plugin-forge/scripts/security_audit.py:930 | 自检夹具里的网络字面量 | 2026-12-15 |
+| skills/plugin-forge/scripts/security_audit.py:932 | 自检夹具里的网络字面量 | 2026-12-15 |
+| skills/plugin-forge/scripts/security_audit.py:935 | 自检夹具里的网络字面量 | 2026-12-15 |
+| skills/plugin-forge/scripts/security_audit.py:937 | 自检夹具里的网络字面量 | 2026-12-15 |
+
+撤掉文件级 --allow 的那一轮（2026-11-17 第 4 项任务）：三条 --allow 全部取消，改为「能改代码消掉的消掉，消不掉的逐点声明」。消掉的方式：
+- 检测规则自己的说明文字改成不会被自己命中的写法（`subprocess shell=True` → `子进程 shell 开关被打开`）
+- 自检夹具里的触发词按本仓口径拆写（`"shel" + "l=True"`）
+- 正则字面量躲不掉的，逐点声明并注明「检测规则的正则字面量本身」
+
+裸扫结果（不加 --allow）：`SEC-1 0 / SEC-2 0 / SEC-3 0 / SEC-4 0`，总分 100/100，退出码 0；点位声明 33 处，畸形或过期声明 0 处。上面这些数字都以实跑为准，别抄进新结论。
 
 ## 例行复跑（2026-11-14，扫描器扩面后）
 

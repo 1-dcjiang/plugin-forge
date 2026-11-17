@@ -98,8 +98,8 @@ def api(url):
     返回 (数据, 故障)。故障取 classify 的三种值，None 表示成功。
     """
     import urllib.error
-    import urllib.request
-    req = urllib.request.Request(url, headers={
+    import urllib.request  # forge-declared: SEC-4 理由=只读拉取 GitHub API 的 UA 头 出处=AUDIT.md#sec-declared 复审=2026-12-15
+    req = urllib.request.Request(url, headers={  # forge-declared: SEC-4 理由=只读拉取 api.github.com 出处=AUDIT.md#sec-declared 复审=2026-12-15
         "Accept": "application/vnd.github+json",
         "User-Agent": "plugin-forge-profile-drift-probe",
     })
@@ -107,7 +107,7 @@ def api(url):
     if tok:
         req.add_header("Authorization", "Bearer " + tok)
     try:
-        with urllib.request.urlopen(req, timeout=60) as r:
+        with urllib.request.urlopen(req, timeout=60) as r:  # forge-declared: SEC-4 理由=只读拉取 api.github.com 出处=AUDIT.md#sec-declared 复审=2026-12-15
             return json.loads(r.read().decode("utf-8", "replace")), None
     except urllib.error.HTTPError as e:
         return None, classify(e.code)
@@ -162,8 +162,8 @@ def api_bytes(url):
     unreachable 并退 2，等于探针天天红却什么都没说。raw 端点没有大小门槛。
     """
     import urllib.error
-    import urllib.request
-    req = urllib.request.Request(url, headers={
+    import urllib.request  # forge-declared: SEC-4 理由=只读拉取 raw.githubusercontent.com 出处=AUDIT.md#sec-declared 复审=2026-12-15
+    req = urllib.request.Request(url, headers={  # forge-declared: SEC-4 理由=只读拉取 raw.githubusercontent.com 出处=AUDIT.md#sec-declared 复审=2026-12-15
         "Accept": "text/plain",
         "User-Agent": "plugin-forge-profile-drift-probe",
     })
@@ -171,7 +171,7 @@ def api_bytes(url):
     if tok:
         req.add_header("Authorization", "Bearer " + tok)
     try:
-        with urllib.request.urlopen(req, timeout=60) as r:
+        with urllib.request.urlopen(req, timeout=60) as r:  # forge-declared: SEC-4 理由=只读拉取 raw.githubusercontent.com 出处=AUDIT.md#sec-declared 复审=2026-12-15
             return r.read(), None
     except urllib.error.HTTPError as e:
         return None, classify(e.code)

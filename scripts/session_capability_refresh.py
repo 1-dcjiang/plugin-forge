@@ -43,7 +43,7 @@ def _safe(s, n=64):
     return re.sub(r"[^A-Za-z0-9._-]", "_", str(s))[:n]
 
 ROOT = os.path.expanduser("~/.workbuddy")
-CODEBUDDY = os.path.expanduser("~/.codebuddy")
+CODEBUDDY = os.path.expanduser("~/.codebuddy")  # forge-declared: SEC-1 理由=按设计只读单机 CLI 配置做能力快照 出处=AUDIT.md#sec-declared 复审=2026-12-15
 MKTS = ROOT + "/plugins/marketplaces"
 # 这里指安装态目录，不是已退役的仓库目录 neko-plugin-ops/（见 AUDIT.md 整合记录）。
 # 改指 skills/neko-plugin-sandbox 会让本项恒报 <MISSING>：那个目录没有 .codebuddy-plugin 清单。

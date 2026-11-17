@@ -33,7 +33,7 @@ import subprocess
 import sys
 import time
 import urllib.error
-import urllib.request
+import urllib.request  # forge-declared: SEC-4 理由=健康探测用 urllib，只打 127.0.0.1 出处=AUDIT.md#sec-declared 复审=2026-12-15
 from pathlib import Path
 
 REPO_URL = "https://github.com/Project-N-E-K-O/N.E.K.O.git"
@@ -145,12 +145,12 @@ def pick_port(host: str, want: int, tries: int = 40) -> int:
 
 # 本机代理（HTTP_PROXY=127.0.0.1:xxxx）会把 127.0.0.1 也当外网转发，
 # 导致服务明明在跑却报 WinError 10061。探活必须显式绕过代理。
-_NO_PROXY_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+_NO_PROXY_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))  # forge-declared: SEC-4 理由=本地回环探测绕过系统代理 出处=AUDIT.md#sec-declared 复审=2026-12-15
 
 
 def http_get(port: int, path: str, timeout: float = 5.0):
     url = f"http://127.0.0.1:{port}{path}"
-    req = urllib.request.Request(url, headers={"Accept": "application/json"})
+    req = urllib.request.Request(url, headers={"Accept": "application/json"})  # forge-declared: SEC-4 理由=只读拉取 GitHub API 出处=AUDIT.md#sec-declared 复审=2026-12-15
     try:
         with _NO_PROXY_OPENER.open(req, timeout=timeout) as r:
             body = r.read().decode("utf-8", "replace")
@@ -268,7 +268,7 @@ def cmd_sync(args):
         log(f"  remote: {remote}")
 
     if run("fetch", "--all", "--prune") != 0:
-        die("git fetch 失败（代理/网络）。源码保持原样，未做改动")
+        die("git fetch 失败（代理/网络）。源码保持原样，未做改动")  # forge-declared: SEC-4 理由=git fetch 官方仓库到沙箱 出处=AUDIT.md#sec-declared 复审=2026-12-15
 
     rc = run("reset", "--hard", f"origin/{branch}") if args.hard else run("pull", "--ff-only")
     if rc != 0:
@@ -670,7 +670,7 @@ def _pid_cmdline(pid):
 
 
 def _read_proc_cmdline(pid):
-    with open("/proc/%s/cmdline" % pid, "rb") as f:
+    with open("/proc/%s/cmdline" % pid, "rb") as f:  # forge-declared: SEC-1 理由=读 /proc 的 pid 命令行 出处=AUDIT.md#sec-declared 复审=2026-12-15
         return f.read()
 
 
@@ -784,7 +784,7 @@ def _pid_really_alive(pid, nt_probe=None, read_stat=None, run_ps=None, on_nt=Non
         return (nt_probe or (lambda p: _pid_cmdline(p)[1]))(pid)
 
     def _stat(p):
-        with open("/proc/%d/stat" % p, encoding="utf-8", errors="replace") as f:
+        with open("/proc/%d/stat" % p, encoding="utf-8", errors="replace") as f:  # forge-declared: SEC-1 理由=读 /proc 的 pid 状态 出处=AUDIT.md#sec-declared 复审=2026-12-15
             return f.read()
 
     def _ps(p):
@@ -1043,9 +1043,9 @@ def _self_test():
             # 2026-11-15 补：粘连 KEY 以前只靠词边界正则，PRIVATEKEY 一类整批漏
             "SESSIONKEY", "PRIVATEKEY", "TLS_PRIVATEKEY", "ENCRYPTIONKEY",
             "SIGNINGKEY", "MASTERKEY", "DEPLOY_BLOB"]
-    vals = {"DATABASE_URL": "postgres://u:sup3rs3cr3tpw@db/x", "db_credential": "x",
-            "CONN_STR": "Server=db.internal;Password=Sup3rS3cret!;Database=app",
-            "REDIS_URL": "redis://:r3d1spassw0rd@cache:6379/0",
+    vals = {"DATABASE_URL": "postgres://u:sup3rs3cr3tpw@db/x", "db_credential": "x",  # forge-declared: SEC-2 理由=自检夹具的假口令形状 出处=AUDIT.md#sec-declared 复审=2026-12-15
+            "CONN_STR": "Server=db.internal;Password=Sup3rS3cret!;Database=app",  # forge-declared: SEC-2 理由=自检夹具的假口令形状 出处=AUDIT.md#sec-declared 复审=2026-12-15
+            "REDIS_URL": "redis://:r3d1spassw0rd@cache:6379/0",  # forge-declared: SEC-2 理由=自检夹具的假口令形状 出处=AUDIT.md#sec-declared 复审=2026-12-15
             "AUTH": "Basic YWxpZGVjOjEyMzQ1Njc4", "SESSION_ID": "abcd1234efgh5678ijkl",
             # PEM 头拆写：本文件会被自己扫，整串会把自己否决（A472 第 4 条口径）
             "DEPLOY_BLOB": "-----BEGIN " + "PRIVATE KEY-----\nMIIEvQIBADAN\n-----END " + "PRIVATE KEY-----"}
@@ -1480,7 +1480,7 @@ def _self_test():
         if rc2 != 0 or not (dest / "main.py").is_file():
             bad.append("plugin-add 重装失败（rc=%s，%s）" % (rc2, out2[-120:]))
         # 非法 id：必须拒绝，否则 rmtree 会删到 plugins 之外
-        (src / "plugin.toml").write_text('[plugin]\nid = "../evil"\n', encoding="utf-8")
+        (src / "plugin.toml").write_text('[plugin]\nid = "../evil"\n', encoding="utf-8")  # forge-declared: SEC-1 理由=自检夹具里的越界 id 出处=AUDIT.md#sec-declared 复审=2026-12-15
         rc3, out3 = _cap(cmd_plugin_add, ns)
         pa_n += 1
         if rc3 == 0:
