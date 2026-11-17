@@ -821,6 +821,15 @@ def _self_test():
                                      for x in body_f.get("unclear", [])])
                 if "nul.py" not in ledger:
                     helper_bad.append("没读动的文件没在账上点名：%s" % ledger[:120])
+                # 超过 2 MiB 的文件同一条规矩：没读就要点名，不许只报一个总数
+                with open(os.path.join(d, "huge.py"), "wb") as f:
+                    f.write(b"# pad\n" * 400000)          # 约 3.2 MiB，过 MAX_BYTES
+                rc_h, body_h = _run(["--fail-unclear"], d)
+                h_ledger = " ".join(body_h.get("skips", []) + list(body_h.get("unread_files", [])))
+                if "huge.py" not in h_ledger:
+                    helper_bad.append("超大文件没进未读账：%s" % h_ledger[:160])
+                if rc_h != 3:
+                    helper_bad.append("有真盲区时 --fail-unclear 应退 3，实得 %s" % rc_h)
             else:
                 rc, body = _run([], d)
                 if (rc, body.get("scanned_files")) != (3, 0):

@@ -150,10 +150,25 @@ marketplace_dirs_fp=（脚本未实现该指纹，仅核对 7 个目录名）  s
 ```bash
 python scripts/session_capability_refresh.py --regen   # 在仓库根目录跑仓库那一份
 ```
-刷新命令只认**仓库那一份**脚本。同一份代码在本机有三处副本（仓库、`~/.workbuddy/hooks/` 挂载态、
-marketplace 安装态），2026-11-17 实测三个 sha256 前 12 位互不相同：仓库 `ad195c115825`、
-挂载态 `8c477c207986`、安装态 `b6d35cf2ff40`。会话里真跑的是挂载态那一版，它比仓库旧 8 小时，
-安装态比仓库旧 10 天。改完脚本要用 `install_sync.py --apply` 同步，别拿安装态的输出口吻当结论。
+刷新命令只认**仓库那一份**脚本。同一份代码在本机有三处副本：仓库 `scripts/`、
+`~/.workbuddy/hooks/` 挂载态、marketplace 安装态。**会话里真跑的是挂载态那一版**，
+所以它最容易落后。2026-11-17 实测三处 sha256 前 12 位互不相同，挂载态比仓库旧 8 小时，安装态旧 10 天。
+别把这三个数抄进长期结论——它们每轮都变，量一次就知道：
+
+```
+python - <<'PY'
+import hashlib, os
+for p in ('scripts/session_capability_refresh.py',
+          '~/.workbuddy/hooks/session_capability_refresh.py',
+          '~/.workbuddy/plugins/marketplaces/my-experts/plugins/neko-plugin-ops/scripts/session_capability_refresh.py'):
+    f = os.path.expanduser(p)
+    print(hashlib.sha256(open(f, 'rb').read()).hexdigest()[:12] if os.path.isfile(f) else '缺失', p)
+PY
+```
+
+同步口径要说准：`install_sync.py` 只管 `.codex` / `.claude` / `.zcode` 三棵 skill 树，
+**它不碰 `~/.workbuddy/hooks/` 那份挂载副本，也不碰 marketplace 安装态**。
+那两处要单独复制；复制前先跑仓库脚本的 `--self-test`。别拿挂载态或安装态的输出当仓库结论。
 
 拿到新值后须**原子同步三处**：本文件 §1 表格 / §2 清单 / §4 指纹块、`session-refresh-sop.md` 的相关基线描述、脚本 `BASELINE` 常量；并同步刷新「基线版本」与「核验日期」。**有差异才改文件；无差异时报「无变更（基线一致，最后核验 <BASELINE_DATE>）」**——
 日期取脚本常量 `BASELINE_DATE`（现值 2026-11-07），别在文档里另写一个日期。
