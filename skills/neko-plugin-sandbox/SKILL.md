@@ -80,7 +80,9 @@ python $D --self-test                                                  # 自检�
 |---|---|
 | 目录名等于 `[plugin].id` | 宿主按目录名扫描，不一致进不了 `/plugins` |
 | `entry` 形状 `module:Symbol` | `plugin/config/schema.py:214` 的 pattern |
-| `main` 与 `plugin.plugins.<id>` 两种写法都合法 | 内置 11 件全用包写法；`plugin/core/host.py:664` 的 `parts[1] != directory.name` 就是要求第二段等于目录名 |
+| 入口模块必须以 `plugin.plugins.<目录名>` 或 `plugins.<目录名>` 开头 | 2026-11-17 对上游 plugin/core/host.py:649 的 `_import_plugin_module` 实测：裸模块名（`main:Class`）在 `source_only` 两种取值下都装不进——False 给 `ModuleNotFoundError`，True 给 `ValueError`「Source-only plugin module must match its source directory」。本机 23 个安装态插件与 11 个内置件也都只用包写法 |
+| `PluginBuilder` 用 `source_only=True` 构建，所以 `plugin.plugins.<目录名>` 是出厂写法；`plugins.<目录名>` 这种归一化前缀两种模式都进得来 | plugin/neko_plugin_cli/core/build.py:509 的 `PluginBuilder`（同形另一条在 :528） |
+| 包名与目录名的等价是**单向**的：目录可 kebab、包必须 snake | `plugin/core/entry_points.py:47-62`（main `e14f61963`）。反过来不成立，真对不上照旧报错；dry_load 用同一个规矩判（`plugin_package_matches_directory`） |
 | 类入口带 `@neko_plugin`，入口方法是协程 | 内置件 11 个类全带该装饰（实测计数） |
 | 没写 `[plugin_runtime] auto_start` 要报 | `plugin/core/registry.py:1293` 的 `auto_start_val = False` 就是按 false 处理 |
 | 写了 `[plugin.host]` 要报 | 上游已移除该节，import 期直接报错 |

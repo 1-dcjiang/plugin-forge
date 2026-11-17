@@ -74,14 +74,23 @@ def toml_has_section(text, section):
     return pat in text.replace("\r\n", "\n")
 
 
+def plugin_package_matches_directory(package, directory_name):
+    """包名与目录名是否算对上。照上游 plugin/core/entry_points.py:47-62（main e14f61963）。
+
+    单向等价：目录可以叫 kebab（my-cool-plugin），包名必须叫 snake（my_cool_plugin），
+    因为包名是 Python 真要 import 的那一侧。反过来不成立，真对不上照旧报错。
+    """
+    return package == directory_name or package == directory_name.replace("-", "_")
+
+
 def entry_module_file(pkg_dir, mod):
     """入口里的 module.path 对应到插件目录里的哪个文件。返回 (路径, 问题)。
 
-    两种写法都合法，实测自本机 neko_host：
-      - `main` / `pkg.mod`：相对插件目录的模块；
-      - `plugin.plugins.<id>[.sub]` 或 `plugins.<id>[.sub]`：内置与安装态的包写法，
-        前两段只是命名空间。上游 host.py:664 要求 `plugins.` 后第一段等于目录名，
-        对不上就 import 不到，这里照同一条规则报。
+    只有包写法能用，2026-11-17 对上游两种装载模式实测：
+      - `plugin.plugins.<id>[.sub]`：内置件与 CLI 构建件（build.py 走 source_only=True）；
+      - `plugins.<id>[.sub]`：安装态归一化后的命名空间，两种模式都进得来。
+    上游 host.py:664 要求 `plugins.` 后第一段等于目录名，对不上就 import 不到，这里照同一条规则报。
+    裸模块名（`main`、`pkg.mod`）在这里只用于定位文件，check_manifest 已把它判成问题。
     """
     name = os.path.basename(os.path.normpath(pkg_dir))
     parts = [p for p in mod.split(".") if p]
@@ -90,9 +99,10 @@ def entry_module_file(pkg_dir, mod):
     if parts[:1] == ["plugins"]:
         if len(parts) < 2:
             return None, "入口包路径 %s 不完整：至少要写到 plugins.<目录名>" % mod
-        if parts[1] != name:
+        if not plugin_package_matches_directory(parts[1], name):
             return None, ("入口写的是 %s，插件目录却叫 %s：上游按 plugins.<目录名> 解析"
-                          "（plugin/core/host.py:664），对不上就 import 不到" % (mod, name))
+                          "（plugin/core/host.py:664 + entry_points.py:47-62），对不上就 import 不到"
+                          % (mod, name))
         parts = parts[2:]
     base = os.path.join(pkg_dir, *parts) if parts else pkg_dir
     for cand in (base + ".py", os.path.join(base, "__init__.py")):
@@ -118,9 +128,11 @@ def check_manifest(pkg_dir):
         problems.append("plugin.toml 里没解析到 [plugin] id")
     elif not ID_RE.match(pid):
         problems.append("[plugin] id「%s」不合法：只允许 ^[A-Za-z_][A-Za-z0-9_]*$" % pid)
-    elif os.path.basename(os.path.normpath(pkg_dir)) != pid:
-        problems.append("目录名「%s」不等于 [plugin] id「%s」：上游按目录名扫描，"
-                        "不一致时插件进不了 /plugins" % (os.path.basename(os.path.normpath(pkg_dir)), pid))
+    elif not plugin_package_matches_directory(pid, os.path.basename(os.path.normpath(pkg_dir))):
+        problems.append("目录名「%s」与 [plugin] id「%s」对不上：上游按目录名扫描，"
+                        "id 是包名那一侧，只允许目录用 kebab、id 用 snake 这一种等价"
+                        "（plugin/core/host.py:533 + entry_points.py:47-62）"
+                        % (os.path.basename(os.path.normpath(pkg_dir)), pid))
     if ptype not in TYPES_OK:
         problems.append("[plugin] type「%s」不支持：上游只留 plugin / adapter，"
                         "历史类型已移除" % ptype)
@@ -132,6 +144,18 @@ def check_manifest(pkg_dir):
     elif not ENTRY_RE.match(entry):
         problems.append("[plugin] entry「%s」形状不对：必须是 module.path:Symbol"
                         "（schema 的正则是 ^[a-zA-Z0-9_.]+:[a-zA-Z0-9_]+$）" % entry)
+    else:
+        mod = entry.split(":", 1)[0]
+        head = mod.split(".")[0]
+        if head not in ("plugin", "plugins"):
+            # 实测（2026-11-17，上游 host.py:649 两种模式各跑一遍）：裸模块名装不进。
+            # source_only=False 给 ModuleNotFoundError，source_only=True 给
+            # ValueError「Source-only plugin module must match its source directory」。
+            # schema 的正则放得下这种写法，宿主不放行：形状对不等于装得进。
+            problems.append(
+                "[plugin] entry「%s」上游装不进：模块路径要以 plugin.plugins.<目录名> 或 "
+                "plugins.<目录名> 开头。裸模块名（如 main）在两种装载模式下都失败"
+                "（plugin/core/host.py:649、664；2026-11-17 对当前上游实测）" % entry)
     if auto is None:
         problems.append("没写 [plugin_runtime] auto_start：上游按 false 处理"
                         "（plugin/core/registry.py:1293），插件会被注册但不会 autostart")
@@ -258,6 +282,9 @@ def real_load(pkg_dir, repo_root, py, info):
     if ":" not in entry:
         return "env", ["entry 不可用，没法定位模块"], ""
     mod, _, sym = entry.partition(":")
+    # 宿主自己分两档装载：CLI 构建与内置件走 source_only=True（host.py:656-683），
+    # 普通命名空间导入走 False。判据要覆盖两档，只问一档会把真装得进的写法报成失败。
+    modes = [True, False] if mod.split(".")[0] in ("plugin", "plugins") else [False]
     toml_path = os.path.abspath(os.path.join(pkg_dir, "plugin.toml"))
     tmp = tempfile.mkdtemp(prefix="dryload-home-")
     script = (
@@ -274,7 +301,8 @@ def real_load(pkg_dir, repo_root, py, info):
         "            return None\n"
         "        return _noop\n"
         "try:\n"
-        "    m = _import_plugin_module(%r, pathlib.Path(%r), _L())\n"
+        "    m = _import_plugin_module(%r, pathlib.Path(%r), _L(), "
+        "source_only=__SOURCE_ONLY__)\n"
         "except BaseException as e:\n"
         "    print('FORGE-IMPORT-FAIL ' + type(e).__name__ + ' ' + str(e)[:300])\n"
         "    raise SystemExit(96)\n"
@@ -286,10 +314,17 @@ def real_load(pkg_dir, repo_root, py, info):
         "                                    ensure_ascii=False))\n"
         % (repo_root, mod, toml_path, sym)
     )
+    outs, codes = [], []
     try:
-        r = subprocess.run([py, "-c", script], capture_output=True, text=True,
-                           timeout=180, env=_isolated_env(tmp), cwd=tmp)
-        out = ((r.stdout or "") + (r.stderr or "")).strip()
+        for so in modes:
+            r = subprocess.run([py, "-c", script.replace("__SOURCE_ONLY__", repr(so))],
+                               capture_output=True, text=True,
+                               timeout=180, env=_isolated_env(tmp), cwd=tmp)
+            outs.append(((r.stdout or "") + (r.stderr or "")).strip())
+            codes.append(r.returncode)
+            if r.returncode == 0:      # 有一档装得进就用那一档的结果，别把成功读成两份
+                break
+        out = outs[-1]
     except (OSError, subprocess.SubprocessError) as e:
         return "env", ["子进程没跑起来：%s（%s）" % (type(e).__name__, str(e)[:80])], ""
     finally:
@@ -411,46 +446,70 @@ def _self_test():
         return d
 
     good_toml = ('[plugin]\nid = "demo_plugin"\nversion = "1.0.0"\n'
-                 'entry = "main:DemoPlugin"\n\n[plugin_runtime]\nauto_start = true\n')
+                 'entry = "plugin.plugins.demo_plugin:DemoPlugin"\n'
+                 '\n[plugin_runtime]\nauto_start = true\n')
     good_src = ("from plugin.sdk.plugin import NekoPluginBase, llm_tool, neko_plugin, plugin_entry\n\n\n"
                 "@neko_plugin\nclass DemoPlugin(NekoPluginBase):\n"
                 "    async def on_load(self):\n        return 1\n\n"
                 "    @llm_tool(name=\"t\")\n    async def t(self):\n        return 2\n")
+    # 默认夹具用上游真能装的包写法：入口类放在插件目录的 __init__.py 里。
+    # 上一版用 main:DemoPlugin，那是宿主两种模式都装不进的写法（见 check_manifest 那条），
+    # 夹具跟着判据改，不然「好例子」只在降级腿下才是好的。
     cases = [
-        ("好例子（降级模式）", dict(toml=good_toml, files={"main.py": good_src}), 0),
-        ("目录名不等于 id", dict(name="other_dir", toml=good_toml, files={"main.py": good_src}), 1),
-        ("没写 auto_start", dict(toml=('[plugin]\nid = "demo_plugin"\nentry = "main:DemoPlugin"\n'),
-                                 files={"main.py": good_src}), 1),
+        ("好例子（降级模式）", dict(toml=good_toml, files={"__init__.py": good_src}), 0),
+        ("目录名不等于 id", dict(name="other_dir", toml=good_toml, files={"__init__.py": good_src}), 1),
+        ("没写 auto_start", dict(toml=('[plugin]\nid = "demo_plugin"\n'
+                                       'entry = "plugin.plugins.demo_plugin:DemoPlugin"\n'),
+                                 files={"__init__.py": good_src}), 1),
         ("写了已移除的 [plugin.host]",
-         dict(toml=good_toml + "\n[plugin.host]\nfoo = 1\n", files={"main.py": good_src}), 1),
+         dict(toml=good_toml + "\n[plugin.host]\nfoo = 1\n", files={"__init__.py": good_src}), 1),
         ("type 是历史值 extension",
          dict(toml=good_toml.replace('version = "1.0.0"', 'version = "1.0.0"\ntype = "extension"'),
-              files={"main.py": good_src}), 1),
-        ("入口符号不在顶层", dict(toml=good_toml, files={"main.py": "class Nope:\n    pass\n"}), 1),
+              files={"__init__.py": good_src}), 1),
+        ("入口符号不在顶层", dict(toml=good_toml, files={"__init__.py": "class Nope:\n    pass\n"}), 1),
         ("入口模块文件缺失", dict(toml=good_toml, files={"other.py": good_src}), 1),
-        ("语法错误", dict(toml=good_toml, files={"main.py": "def broken(:\n"}), 1),
+        ("语法错误", dict(toml=good_toml, files={"__init__.py": "def broken(:\n"}), 1),
         ("入口函数不是 async",
          dict(toml=good_toml.replace("DemoPlugin", "demo_entry"),
-              files={"main.py": ("from plugin.sdk.plugin import plugin_entry\n\n\n"
-                                 "@plugin_entry(id=\"demo\")\ndef demo_entry():\n    return 1\n")}), 1),
+              files={"__init__.py": ("from plugin.sdk.plugin import plugin_entry\n\n\n"
+                                     "@plugin_entry(id=\"demo\")\ndef demo_entry():\n    return 1\n")}), 1),
         ("方法带 @llm_tool 却不是 async",
-         dict(toml=good_toml, files={"main.py": good_src.replace("    async def t(self)",
-                                                                 "    def t(self)")}), 1),
+         dict(toml=good_toml, files={"__init__.py": good_src.replace("    async def t(self)",
+                                                                     "    def t(self)")}), 1),
         ("相对导入指向不存在的模块",
-         dict(toml=good_toml, files={"main.py": good_src + "\nfrom . import ghost\n"}), 1),
-        ("entry 形状不对", dict(toml=good_toml.replace("main:DemoPlugin", "main.DemoPlugin"),
-                                files={"main.py": good_src}), 1),
-        # 内置插件的真实写法：plugin.plugins.<目录名>:符号（本机 neko_host 的 11 个内置件都这样）
-        ("包写法合法（plugin.plugins.<id>）",
-         dict(toml=good_toml.replace("main:DemoPlugin", "plugin.plugins.demo_plugin:DemoPlugin"),
-              files={"main.py": good_src, "__init__.py": good_src}), 0),
+         dict(toml=good_toml, files={"__init__.py": good_src + "\nfrom . import ghost\n"}), 1),
+        ("entry 形状不对", dict(toml=good_toml.replace("plugin.plugins.demo_plugin:DemoPlugin",
+                                                      "plugin.plugins.demo_plugin.DemoPlugin"),
+                                files={"__init__.py": good_src}), 1),
+        # 裸模块名：schema 的正则放得下，宿主两种装载模式都装不进（2026-11-17 实测）
+        ("裸模块名写法上游装不进",
+         dict(toml=good_toml.replace("plugin.plugins.demo_plugin:DemoPlugin", "main:DemoPlugin"),
+              files={"main.py": good_src, "__init__.py": good_src}), 1),
+        # 内置件与 CLI 构建件的写法：plugin.plugins.<目录名>:符号
+        ("包写法合法（plugins.<id>，安装态归一化后的前缀）",
+         dict(toml=good_toml.replace("plugin.plugins.demo_plugin:DemoPlugin",
+                                     "plugins.demo_plugin:DemoPlugin"),
+              files={"__init__.py": good_src}), 0),
+        # 包名与目录名的等价是单向的（上游 entry_points.py:47-62，2026-11-18 对 main 实读）：
+        # 目录可以 kebab、包必须 snake；反过来不成立
+        ("目录名 kebab 与包名 snake 等价（单向）",
+         dict(name="my-cool-plugin",
+              toml=good_toml.replace('id = "demo_plugin"', 'id = "my_cool_plugin"')
+                           .replace("plugin.plugins.demo_plugin", "plugin.plugins.my_cool_plugin"),
+              files={"__init__.py": good_src}), 0),
+        ("包名写成 kebab 必须失败",
+         dict(name="my_cool_plugin",
+              toml=good_toml.replace('id = "demo_plugin"', 'id = "my_cool_plugin"')
+                           .replace("plugin.plugins.demo_plugin", "plugin.plugins.my-cool-plugin"),
+              files={"__init__.py": good_src}), 1),
         ("包写法与目录名对不上",
-         dict(toml=good_toml.replace("main:DemoPlugin", "plugin.plugins.other_dir:DemoPlugin"),
-              files={"main.py": good_src}), 1),
+         dict(toml=good_toml.replace("plugin.plugins.demo_plugin:DemoPlugin",
+                                     "plugin.plugins.other_dir:DemoPlugin"),
+              files={"__init__.py": good_src}), 1),
         ("包写法指到子模块",
-         dict(toml=good_toml.replace("main:DemoPlugin",
+         dict(toml=good_toml.replace("plugin.plugins.demo_plugin:DemoPlugin",
                                      "plugin.plugins.demo_plugin.entry:DemoPlugin"),
-              files={"entry.py": good_src}), 0),
+              files={"__init__.py": "", "entry.py": good_src}), 0),
     ]
     for i, case in enumerate(cases):
         name, spec, want = case
@@ -462,6 +521,14 @@ def _self_test():
         if code != want:
             bad.append("%s：退出码 %s，期望 %s（问题=%s）"
                        % (name, code, want, (_rep.get("problems") or ["无"])[:2]))
+    # 包名-目录名等价的方向性要单独钉住：上面两条端到端用例分不清是形状拦的还是等价拦的
+    n += 1
+    if (plugin_package_matches_directory("my_cool_plugin", "my-cool-plugin"),
+            plugin_package_matches_directory("my-cool-plugin", "my_cool_plugin"),
+            plugin_package_matches_directory("demo_plugin", "demo_plugin"),
+            plugin_package_matches_directory("other_dir", "demo_plugin")) != (True, False, True, False):
+        bad.append("包名与目录名的等价不是单向的（上游 entry_points.py:47-62 只允许"
+                   "目录 kebab ↔ 包 snake 这一个方向）")
     # 目录不存在必须是用法错误 2
     code, _rep = run(os.path.join(root, "nope-dir"))
     n += 1
@@ -495,16 +562,36 @@ def _self_test():
         os.makedirs(core, exist_ok=True)
         io.open(os.path.join(core, "__init__.py"), "w", encoding="utf-8", newline=chr(10)).write("")
         io.open(os.path.join(core, "host.py"), "w", encoding="utf-8", newline=chr(10)).write(
-            "import importlib, os, sys\n\n\n"
+            "import importlib.util, os, sys\n\n\n"
             "def _import_plugin_module(module_path, config_path, logger, *, source_only=False):\n"
-            "    # 与上游同签名：真装载那条腿要按宿主的方式解析模块\n"
-            "    sys.path.insert(0, str(os.path.dirname(str(config_path))))\n"
-            "    return importlib.import_module(module_path)\n")
+            "    # 与上游同签名、同规矩（host.py:649、656-683、557-582）：\n"
+            "    # 包写法要拆掉 plugin. 前缀，plugins. 后第一段必须等于插件目录名，\n"
+            "    # 对得上就从插件目录的 __init__.py 载入。裸模块名在这种规矩下必然失败。\n"
+            "    parts = [x for x in str(module_path).split('.') if x]\n"
+            "    if parts[:1] == ['plugin']:\n"
+            "        parts = parts[1:]\n"
+            "    directory = os.path.dirname(str(config_path))\n"
+            "    if len(parts) < 2 or parts[0] != 'plugins' or parts[1] != os.path.basename(directory):\n"
+            "        if source_only:\n"
+            "            raise ValueError('Source-only plugin module must match its source directory')\n"
+            "        import importlib as _il\n"
+            "        return _il.import_module(module_path)\n"
+            "    name = 'forge_probe_' + parts[1]\n"
+            "    spec = importlib.util.spec_from_file_location(\n"
+            "        name, os.path.join(directory, '__init__.py'),\n"
+            "        submodule_search_locations=[directory])\n"
+            "    if spec is None or spec.loader is None:\n"
+            "        raise ImportError('no spec for ' + name)\n"
+            "    mod = importlib.util.module_from_spec(spec)\n"
+            "    sys.modules[name] = mod\n"
+            "    spec.loader.exec_module(mod)\n"
+            "    return mod\n")
         rpkg = os.path.join(fake, "pkgs", "demo_plugin")
         os.makedirs(rpkg, exist_ok=True)
         io.open(os.path.join(rpkg, "plugin.toml"), "w", encoding="utf-8", newline=chr(10)).write(
             good_toml)
-        io.open(os.path.join(rpkg, "main.py"), "w", encoding="utf-8", newline=chr(10)).write(good_src)
+        io.open(os.path.join(rpkg, "__init__.py"), "w", encoding="utf-8",
+                newline=chr(10)).write(good_src)
         code, rep_ = run(rpkg, py=sys.executable, repo=fake)
         n += 1
         if rep_.get("mode") != "real-import":
@@ -512,7 +599,7 @@ def _self_test():
                        % (rep_.get("mode"), rep_.get("degrade_reason")))
         elif code != 0:
             bad.append("真装载应通过却退 %s：%s" % (code, (rep_.get("problems") or [])[:2]))
-        mpath = os.path.join(rpkg, "main.py")
+        mpath = os.path.join(rpkg, "__init__.py")
 
         def _write_main(lines):
             io.open(mpath, "w", encoding="utf-8", newline=chr(10)).write(

@@ -958,6 +958,56 @@ coopanion-forge 那边 `pnpm install` 进工作区以后，`JSON artifacts parse
 - 两仓实跑：本仓 5 个产物退 0；姊妹仓 15 个退 0，CI run `44119780658` 与 `44120167080` 全绿
 - 教训写进口径：门禁报错必须点名到文件。只给一行异常文本的判据，坏了三次也定位不到根因
 
+### 假绿修复：dry_load 放过上游装不进的入口写法，夹具自己就是那种写法
+
+触发点是我把强腿真跑起来（本机有 `D:/N.E.K.O/.venv`，以前只在 CI 上跑降级腿）。
+好样例 `demo_ok` 用 `entry = \"main:DemoOkPlugin\"`，强腿直接报
+`ModuleNotFoundError No module named 'main'`——**它在真宿主下根本装不进**，
+而 `--demo-check` 一直退 0，因为 CI 没有宿主，只跑 AST 腿。
+
+对上游 `plugin/core/host.py:649 _import_plugin_module` 实测（临时插件目录
+`installs/plugins/demo_ok`，符号在 `__init__.py`；so = source_only）：
+
+| 模块写法 | so=False | so=True |
+|---|---|---|
+| `plugin.plugins.demo_ok` | ModuleNotFoundError | OK，取到符号 |
+| `plugins.demo_ok` | OK，取到符号 | OK，取到符号 |
+| `main` | ModuleNotFoundError | ValueError「Source-only plugin module must match its source directory」 |
+
+现场佐证：本机 23 个安装态插件与仓库内 11 个内置件**全部**用 `plugin.plugins.<目录名>:符号`，
+没有一个用裸模块名。`neko-plugin-dev` 的脚手架也生成包写法。
+
+落地的四处改动：
+
+1. `check_manifest` 新增一条：入口模块路径不以 `plugin.plugins.` / `plugins.` 开头就报，
+   理由带上面那张表的两种失败形状。旧说法「`main` 与包写法两种都合法」作废，
+   那是我没实测就写进判据的话
+2. 强腿按宿主的两档模式各试一次（`source_only=True` 先、False 后）。以前固定传 False，
+   于是把出厂写法 `plugin.plugins.<id>` 全报成 import 失败——那是假红
+3. 假上游（自检与 pytest 的夹具宿主）改成照上游规矩解析包名，不再用 `sys.path` 兜底；
+   兜底就是当初放过裸模块名的原因
+4. 夹具与用例换成包写法：`tests/fixtures/plugins/demo_ok`、`demo_broken` 的入口与源码位置都改，
+   `tests/test_dry_load.py` 补 `bare_module_entry`、`pkg_prefix_mismatch`、
+   `test_真装载对裸模块名写法必须报装不进` 三条
+
+### 与上游对齐时新发现的规则（不是我这轮改的，是上游 main 新加的）
+
+`plugin/core/host.py` 在 `04cc05709`（本机 checkout）与 main `e14f61963` 之间只差 4 处：
+包名与目录名的比较换成了 `plugin_package_matches_directory`（`plugin/core/entry_points.py:47-62`）。
+规矩是**单向**等价：目录可以 kebab（`my-cool-plugin`），包名必须 snake（`my_cool_plugin`），
+因为包名是 Python 真要 import 的那一侧；反过来不成立。dry_load 以前按严格相等判，
+会把 clone 出来的 kebab 目录判成装不进——假红。现在本仓接入同一个函数，
+并在自检里钉住方向性（`(True, False, True, False)`）。
+这条同时改了 `[plugin].id` 与目录名那条判据（上游 `host.py:533` 用的是同一个函数）。
+
+验证：`dry_load.py --self-test` 26 → 29 例全过；`pytest -q` 39 项通过
+（本机用 `neko_host/.venv` 的 python 跑，系统 python 没装 pytest）；
+`--demo-check` 退 0（好样例通过、坏样例报 2 处）；
+强腿用真宿主跑好样例：`模式：real-import`、`结论：通过`。
+`profile_drift.py --strict`：锚点 129 → 131 条、漂移 0、核不了 0，退 0。
+这一步当场又抓了我自己两次写锚点的错：先写成裸 `host.py:649`（探针不路由裸文件名），
+再写成 `build.py:509、528` 而符号池被同段的 `plugins` 抢走——两条都按 SKILL §5 的
+「path:NN 的 `SYMBOL`」写法改对才绿。判据在拦别人之前先拦了我，这正是它该有的样子。
 ### 仍未处理（写清楚，不算已解决）
 
 - `--include-docs` 没接进 CI：本仓文档里有大量示例文本会撞 SEC-1/3/4，逐条人工判过才能豁免。

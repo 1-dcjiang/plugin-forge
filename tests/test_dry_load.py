@@ -3,6 +3,10 @@
 
 这一组用例的意义在于「执行层」：以前所有门禁都不运行插件代码，
 agent 自报「测过了」没法证伪。
+
+夹具的入口写法全用上游真能装的包写法（`plugin.plugins.<目录名>:符号`，类在 __init__.py）。
+2026-11-17 对上游实测：裸模块名（`main:符号`）在 source_only 两种取值下都装不进，
+所以以前那套 `main:DemoPlugin` 夹具是个假绿——它只在降级腿下才算好。
 """
 import io
 import os
@@ -12,7 +16,7 @@ import pytest
 TOML_OK = ("[plugin]\n"
            'id = "demo_plugin"\n'
            'version = "1.0.0"\n'
-           'entry = "main:DemoPlugin"\n'
+           'entry = "plugin.plugins.demo_plugin:DemoPlugin"\n'
            'author = "t"\n'
            'name = "n"\n'
            'description = "d"\n'
@@ -31,6 +35,29 @@ class DemoPlugin(NekoPluginBase):
         return 2
 """
 
+# 假上游：照 host.py:557-582、656-683 的规矩解析包写法，别用 sys.path 兜底糊过去
+FAKE_HOST = (
+    "import importlib.util, os, sys\n\n\n"
+    "def _import_plugin_module(module_path, config_path, logger, *, source_only=False):\n"
+    "    parts = [x for x in str(module_path).split('.') if x]\n"
+    "    if parts[:1] == ['plugin']:\n"
+    "        parts = parts[1:]\n"
+    "    directory = os.path.dirname(str(config_path))\n"
+    "    if len(parts) < 2 or parts[0] != 'plugins' or parts[1] != os.path.basename(directory):\n"
+    "        if source_only:\n"
+    "            raise ValueError('Source-only plugin module must match its source directory')\n"
+    "        import importlib as _il\n"
+    "        return _il.import_module(module_path)\n"
+    "    name = 'forge_probe_' + parts[1]\n"
+    "    spec = importlib.util.spec_from_file_location(\n"
+    "        name, os.path.join(directory, '__init__.py'), submodule_search_locations=[directory])\n"
+    "    if spec is None or spec.loader is None:\n"
+    "        raise ImportError('no spec for ' + name)\n"
+    "    mod = importlib.util.module_from_spec(spec)\n"
+    "    sys.modules[name] = mod\n"
+    "    spec.loader.exec_module(mod)\n"
+    "    return mod\n")
+
 
 def _pkg(root, name, toml, files):
     d = os.path.join(str(root), name)
@@ -43,8 +70,28 @@ def _pkg(root, name, toml, files):
     return d
 
 
+def _fake_repo(base):
+    """搭一个最小假上游：plugin.sdk.plugin 与 plugin.core.host 两个件够用。"""
+    sdk = os.path.join(base, "plugin", "sdk", "plugin")
+    core = os.path.join(base, "plugin", "core")
+    os.makedirs(sdk)
+    os.makedirs(core)
+    for p in (os.path.join(base, "plugin", "__init__.py"),
+              os.path.join(base, "plugin", "sdk", "__init__.py"),
+              os.path.join(core, "__init__.py")):
+        io.open(p, "w", encoding="utf-8").write("")
+    io.open(os.path.join(sdk, "__init__.py"), "w", encoding="utf-8", newline="\n").write(
+        "class NekoPluginBase(object):\n    pass\n\n\n"
+        "def neko_plugin(cls=None, **k):\n"
+        "    return cls if cls is not None else (lambda c: c)\n\n\n"
+        "def plugin_entry(*a, **k):\n    return lambda c: c\n\n\n"
+        "def llm_tool(*a, **k):\n    return lambda f: f\n")
+    io.open(os.path.join(core, "host.py"), "w", encoding="utf-8", newline="\n").write(FAKE_HOST)
+    return base
+
+
 def test_好样例必须退_0(dry_load, tmp_path):
-    d = _pkg(tmp_path, "demo_plugin", TOML_OK, {"main.py": SRC_OK})
+    d = _pkg(tmp_path, "demo_plugin", TOML_OK, {"__init__.py": SRC_OK})
     code, rep = dry_load.run(d)
     assert code == 0, rep["problems"]
     assert rep["mode"] == "ast-fallback"
@@ -63,40 +110,55 @@ def test_仓内对照样例保持一好一坏(dry_load, repo_root):
 @pytest.mark.parametrize("kind", [
     "syntax", "no_symbol", "not_async", "bad_entry_shape", "type_removed",
     "host_section", "id_mismatch", "missing_toml", "relative_import",
+    "bare_module_entry", "pkg_prefix_mismatch",
 ])
-def test_九种坏形状各自必须失败(dry_load, tmp_path, kind):
-    d = None
+def test_坏形状各自必须失败(dry_load, tmp_path, kind):
     if kind == "syntax":
-        d = _pkg(tmp_path, "demo_plugin", TOML_OK, {"main.py": "def broken(:\n"})
+        d = _pkg(tmp_path, "demo_plugin", TOML_OK, {"__init__.py": "def broken(:\n"})
     elif kind == "no_symbol":
         d = _pkg(tmp_path, "demo_plugin", TOML_OK,
-                 {"main.py": SRC_OK.replace("class DemoPlugin", "class ElsePlugin")})
+                 {"__init__.py": SRC_OK.replace("class DemoPlugin", "class ElsePlugin")})
     elif kind == "not_async":
         d = _pkg(tmp_path, "demo_plugin", TOML_OK,
-                 {"main.py": SRC_OK.replace("    async def t(self)", "    def t(self)")})
+                 {"__init__.py": SRC_OK.replace("    async def t(self)", "    def t(self)")})
     elif kind == "bad_entry_shape":
-        d = _pkg(tmp_path, "demo_plugin", TOML_OK.replace('entry = "main:DemoPlugin"',
-                                                          'entry = "main.DemoPlugin"'),
-                 {"main.py": SRC_OK})
+        d = _pkg(tmp_path, "demo_plugin",
+                 TOML_OK.replace('entry = "plugin.plugins.demo_plugin:DemoPlugin"',
+                                 'entry = "plugin.plugins.demo_plugin.DemoPlugin"'),
+                 {"__init__.py": SRC_OK})
     elif kind == "type_removed":
         d = _pkg(tmp_path, "demo_plugin",
                  TOML_OK.replace('version = "1.0.0"', 'version = "1.0.0"\ntype = "extension"'),
-                 {"main.py": SRC_OK})
+                 {"__init__.py": SRC_OK})
     elif kind == "host_section":
         d = _pkg(tmp_path, "demo_plugin", TOML_OK + "\n[plugin.host]\nfoo = 1\n",
-                 {"main.py": SRC_OK})
+                 {"__init__.py": SRC_OK})
     elif kind == "id_mismatch":
-        d = _pkg(tmp_path, "other_dir", TOML_OK, {"main.py": SRC_OK})
+        d = _pkg(tmp_path, "other_dir", TOML_OK, {"__init__.py": SRC_OK})
     elif kind == "relative_import":
         d = _pkg(tmp_path, "demo_plugin", TOML_OK,
-                 {"main.py": SRC_OK + "\nfrom . import ghost\n"})
+                 {"__init__.py": SRC_OK + "\nfrom . import ghost\n"})
+    elif kind == "bare_module_entry":
+        # 裸模块名：schema 的正则放得下，宿主两种装载模式都装不进（2026-11-17 对上游实测）
+        d = _pkg(tmp_path, "demo_plugin",
+                 TOML_OK.replace('entry = "plugin.plugins.demo_plugin:DemoPlugin"',
+                                 'entry = "main:DemoPlugin"'),
+                 {"main.py": SRC_OK, "__init__.py": SRC_OK})
+    elif kind == "pkg_prefix_mismatch":
+        d = _pkg(tmp_path, "demo_plugin",
+                 TOML_OK.replace("plugin.plugins.demo_plugin", "plugin.plugins.other_name"),
+                 {"__init__.py": SRC_OK})
     else:  # missing_toml
         d = str(tmp_path / "empty_dir")
         os.makedirs(d, exist_ok=True)
-        io.open(os.path.join(d, "main.py"), "w", encoding="utf-8").write("x = 1\n")
+        io.open(os.path.join(d, "__init__.py"), "w", encoding="utf-8").write("x = 1\n")
     code, rep = dry_load.run(d)
     assert code == 1, (kind, code, rep.get("problems"))
     assert rep["problems"], kind
+    if kind == "bare_module_entry":
+        assert any("装不进" in x for x in rep["problems"]), rep["problems"]
+    if kind == "pkg_prefix_mismatch":
+        assert any("host.py:664" in x or "目录名" in x for x in rep["problems"]), rep["problems"]
 
 
 def test_目录不存在是用法错误不是发现问题(dry_load, tmp_path):
@@ -105,61 +167,46 @@ def test_目录不存在是用法错误不是发现问题(dry_load, tmp_path):
     assert rep["mode"] == "usage"
 
 
-def test_内置插件的包写法不能被误判(dry_load, tmp_path):
-    """本机 11 个内置件都用 plugin.plugins.<id>:Class；旧判据把它们全判成坏插件。"""
-    toml = TOML_OK.replace('entry = "main:DemoPlugin"',
-                           'entry = "plugin.plugins.demo_plugin:DemoPlugin"')
-    d = _pkg(tmp_path, "demo_plugin", toml,
-             {"__init__.py": SRC_OK, "main.py": SRC_OK})
+def test_安装态前缀也合法(dry_load, tmp_path):
+    """plugins.<id> 是归一化后的前缀，上游两种模式都进得来（本轮实测）。"""
+    toml = TOML_OK.replace("plugin.plugins.demo_plugin", "plugins.demo_plugin")
+    d = _pkg(tmp_path, "demo_plugin", toml, {"__init__.py": SRC_OK})
     code, rep = dry_load.run(d)
     assert code == 0, rep["problems"]
 
 
-def test_包写法第二段与目录名不符必须失败(dry_load, tmp_path):
-    toml = TOML_OK.replace('entry = "main:DemoPlugin"',
-                           'entry = "plugin.plugins.other_name:DemoPlugin"')
-    d = _pkg(tmp_path, "demo_plugin", toml, {"main.py": SRC_OK})
-    code, rep = dry_load.run(d)
-    assert code == 1
-    assert any("host.py:664" in x or "目录名" in x for x in rep["problems"]), rep["problems"]
-
-
-def test_真装载那条腿在_CI_上确实跑到(dry_load, tmp_path, monkeypatch):
-    """假 SDK 里放一个同签名的 _import_plugin_module，真装载分支就有覆盖。"""
-    import importlib
+def test_真装载那条腿在_CI_上确实跑到(dry_load, tmp_path):
+    """假上游里放同签名且同规矩的 _import_plugin_module，真装载分支就有覆盖。"""
     import subprocess
     import sys
-    import tempfile
-    import shutil as _sh
 
-    fake = tempfile.mkdtemp(prefix="dryload-pytest-")
-    try:
-        core = os.path.join(fake, "plugin", "core")
-        sdk = os.path.join(fake, "plugin", "sdk", "plugin")
-        os.makedirs(core)
-        os.makedirs(sdk)
-        for p in (os.path.join(fake, "plugin", "__init__.py"),
-                  os.path.join(core, "__init__.py"),
-                  os.path.join(fake, "plugin", "sdk", "__init__.py")):
-            io.open(p, "w", encoding="utf-8").write("")
-        io.open(os.path.join(sdk, "__init__.py"), "w", encoding="utf-8", newline="\n").write(
-            "class NekoPluginBase(object):\n    pass\n\n\n"
-            "def neko_plugin(cls=None, **k):\n"
-            "    return cls if cls is not None else (lambda c: c)\n\n\n"
-            "def llm_tool(*a, **k):\n    return lambda f: f\n")
-        io.open(os.path.join(core, "host.py"), "w", encoding="utf-8", newline="\n").write(
-            "import importlib, os, sys\n\n\n"
-            "def _import_plugin_module(module_path, config_path, logger, *, source_only=False):\n"
-            "    sys.path.insert(0, str(os.path.dirname(str(config_path))))\n"
-            "    return importlib.import_module(module_path)\n")
-        d = _pkg(fake, "demo_plugin", TOML_OK, {"main.py": SRC_OK})
-        code, rep = dry_load.run(d, py=sys.executable, repo=fake)
-        assert rep["mode"] == "real-import", rep
-        assert code == 0, rep["problems"]
-        # 入口符号被改名时，AST 层就该拦住
-        io.open(os.path.join(d, "main.py"), "w", encoding="utf-8", newline="\n").write(
-            SRC_OK.replace("class DemoPlugin", "class GonePlugin"))
-        code2, rep2 = dry_load.run(d, py=sys.executable, repo=fake)
-        assert code2 == 1, rep2
-    finally:
-        _sh.rmtree(fake, ignore_errors=True)
+    fake = _fake_repo(str(tmp_path / "repo"))
+    pkg_root = os.path.join(fake, "pkgs", "demo_plugin")
+    os.makedirs(pkg_root, exist_ok=True)
+    io.open(os.path.join(pkg_root, "plugin.toml"), "w", encoding="utf-8", newline="\n").write(TOML_OK)
+    entry_py = os.path.join(pkg_root, "__init__.py")
+    io.open(entry_py, "w", encoding="utf-8", newline="\n").write(SRC_OK)
+    code, rep = dry_load.run(pkg_root, py=sys.executable, repo=fake)
+    assert rep["mode"] == "real-import", rep
+    assert code == 0, rep["problems"]
+    # 入口符号改名：AST 层就该拦住
+    io.open(entry_py, "w", encoding="utf-8", newline="\n").write(
+        SRC_OK.replace("class DemoPlugin", "class GonePlugin"))
+    code2, rep2 = dry_load.run(pkg_root, py=sys.executable, repo=fake)
+    assert code2 == 1, rep2
+
+
+def test_真装载对裸模块名写法必须报装不进(dry_load, tmp_path):
+    """降级腿以前会放这种写法过去；强腿接上上游函数以后它必然失败。"""
+    import sys
+
+    fake = _fake_repo(str(tmp_path / "repo"))
+    pkg_root = os.path.join(fake, "pkgs", "demo_plugin")
+    os.makedirs(pkg_root, exist_ok=True)
+    io.open(os.path.join(pkg_root, "plugin.toml"), "w", encoding="utf-8", newline="\n").write(
+        TOML_OK.replace('entry = "plugin.plugins.demo_plugin:DemoPlugin"', 'entry = "main:DemoPlugin"'))
+    io.open(os.path.join(pkg_root, "main.py"), "w", encoding="utf-8", newline="\n").write(SRC_OK)
+    io.open(os.path.join(pkg_root, "__init__.py"), "w", encoding="utf-8", newline="\n").write(SRC_OK)
+    code, rep = dry_load.run(pkg_root, py=sys.executable, repo=fake)
+    assert code == 1, rep
+    assert any("装不进" in x for x in rep["problems"]), rep["problems"]
