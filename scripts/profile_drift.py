@@ -49,10 +49,13 @@ NL = chr(10)
 PATH_RE = re.compile(r"(?<![\w/.\-])((?:plugin|app|config|docs|nekoclaw|memory|launcher_core|"
                      r"main_logic|\.agent|utils|brain)/[\w./\-]*\.(?:py|md|toml|json|js|ts))")
 IDENT_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]{3,}")
-# 认这四种形状：NNN 行、:NNN、（NNN 或（NNN/NNN、带标签的「id 212、name 213」。
-# issue 号带 #、章节号带 §，都不会被吃进来。第四种必须跟在短标签后并以顿号或括号收尾，
-# 否则「见 4.2 与自查 5、6、8」这种句子编号会被当成行号——第一版探针就在这里报了 8 条假漂移。
+# 认这五种形状：NNN 行、NNN-NNN 行（区间也要，旧版因为 lookbehind 挡了连字符，
+# 「实测为 105-113 行」整条抽不出来，那一行的锚点完全不在门禁里）、:NNN、（NNN 或（NNN/NNN、
+# 带标签的「id 212、name 213」。issue 号带 #、章节号带 §，都不会被吃进来。
+# 最后一种必须跟在短标签后并以顿号或括号收尾，否则「见 4.2 与自查 5、6、8」这种句子编号会被当成行号——
+# 第一版探针就在这里报了 8 条假漂移。
 NUM_PATTERNS = (re.compile(r"(?<![\w.\-])(\d{1,5})(?=\s*行)"),
+                re.compile(r"(?<![\w.])(\d{1,5})\s*[-–]\s*(\d{1,5})(?=\s*行)"),
                 re.compile(r":(\d{1,5})(?![\d%])"),
                 re.compile(r"[（(]\s*(\d{1,5}(?:\s*[/、,]\s*\d{1,5})*)"),
                 re.compile(r"(?<=[A-Za-z_] )(\d{1,5})(?=[、，,)）])"))
@@ -199,13 +202,21 @@ def where_symbol(lines, token):
 
 
 def window_nums(seg):
+    """从一段文字里抽行号。每个匹配的所有捕获组都要，第二个模式是「105-113 行」这种区间。
+
+    不拆 "-" 的全局切分：文档里有一句专门列「已失效的旧行号 1055-1150、1693-2049」，
+    那种历史数字一旦被当成锚点，探针就会天天报假漂移。
+    """
     out = []
     for pat in NUM_PATTERNS:
-        for m in pat.finditer(seg):
-            for piece in re.split(r"[/、,]", m.group(1)):
-                piece = piece.strip()
-                if piece.isdigit() and 1 <= int(piece) <= 40000:
-                    out.append(int(piece))
+        for mtch in pat.finditer(seg):
+            for group in mtch.groups():
+                if group is None:
+                    continue
+                for piece in re.split(r"[/、,]", group):
+                    piece = piece.strip()
+                    if piece.isdigit() and 1 <= int(piece) <= 40000:
+                        out.append(int(piece))
     return sorted(set(out))
 
 
@@ -218,6 +229,30 @@ def _route_literals(seg):
     `health()`、`PluginPageMutationGuardedRoute` 这些照旧留下。
     """
     return re.sub(r"`[^`]*?/[^`]*?`", " ", seg)
+
+
+def _anchor_symbol_span(seg):
+    """只认文档自己的两种写法，别的散文一律不看。
+
+    第一版这里用「整段里像代码的词」，结果四条假漂移：文档写 `@llm_tool` 不在该文件、
+    写某个类「不叫 PluginManifestSchema」、把 latest_user_request 挂在另一条链上——
+    那些都是散文，不是锚点。profile 第 26 行的规矩本来就规定了写法：
+    「文件:符号名」。那就只按这个形状取符号。
+    """
+    m1 = re.match(r"\s*[:：]\s*(?:`([^`]{3,60})`|([A-Za-z_][\w.]{2,60}))", seg)
+    if m1:
+        raw = m1.group(1) or m1.group(2)
+    else:
+        m2 = re.match(r"\s*的\s*`([A-Za-z_][\w.]{2,60})`", seg)
+        if not m2:
+            return []
+        raw = m2.group(1)
+    out = []
+    for piece in re.split(r"[、+，,]", raw):
+        piece = piece.strip().strip("`").split("(")[0].split(" ")[0].strip()
+        if re.fullmatch(r"[A-Za-z_][\w.]{2,60}", piece or "") and piece.lower() not in STOPWORDS:
+            out.append(piece)
+    return out[:6]
 
 
 def collect(text):
@@ -237,6 +272,16 @@ def collect(text):
             seg = line[m.end():stop]
             nums = window_nums(seg)
             if not nums:
+                # 2026-11-17 补：路径后面一个行号都没有的那些锚点。profile 第 26 行的规矩是
+                # 「每条能力面结论带 文件:符号名」，所以这类写法是故意的，可探针以前一条都不抽，
+                # 于是约六十处声明完全在门禁之外。现在按符号存在性核：符号还在不在那个文件里。
+                syms = _anchor_symbol_span(seg)
+                if not syms:
+                    continue
+                anchors.append({"line": no, "path": m.group(1), "nums": [],
+                                "tokens": [], "weak": False, "syms": list(dict.fromkeys(syms))[:6],
+                                "symbol_only": True,
+                                "text": line.strip()[:120]})
                 continue
             toks = [x for x in IDENT_RE.findall(_route_literals(seg))
                     if x.lower() not in STOPWORDS and not re.fullmatch(r"[0-9a-fA-F]{7,}", x)]
@@ -246,7 +291,8 @@ def collect(text):
                             "text": line.strip()[:120]})
     seen, uniq = set(), []
     for an in anchors:
-        k = (an["path"], tuple(an["nums"]), an["weak"])
+        k = (an["path"], tuple(an["nums"]), an["weak"], an.get("symbol_only"),
+             tuple(an.get("syms", [])))
         if k not in seen:
             seen.add(k)
             uniq.append(an)
@@ -310,6 +356,25 @@ def check(anchors, head, get=None, get_raw=None, cache_dir=None):
             why = {"limited": "限流（403/429），带 GITHUB_TOKEN 再跑",
                    "big": "文件超过 contents API 的正文上限（1MB），需改用 git blob API 才能核"}.get(err, "传输失败（超时或断网）")
             rows.append(dict(an, status="unreachable", detail=why))
+            continue
+        if an.get("symbol_only"):
+            # 只有符号名没有行号的锚点：核符号还在不在整个文件里。符号没了就是改名或搬走，
+            # 那种声明会一路误导排障，以前这类完全不在门禁之内。
+            # 带点的写法（TaskAgentManager._brief）上游是「类里定义 def _brief」，正文里没有
+            # 那串点号，所以按每一段分别核：类名与方法名都要在该文件里出现。
+            blob = NL.join(lines)
+            missing = []
+            for s in an["syms"]:
+                parts = [p for p in s.split(".") if p]
+                if all(p in blob for p in parts):
+                    continue
+                missing.append(s)
+            if missing:
+                rows.append(dict(an, status="drift",
+                                 detail="上游该文件里已经找不到这些符号：%s（多半改了名或搬走，"
+                                        "去上游搜一遍再改文档）" % ", ".join(missing)))
+            else:
+                rows.append(dict(an, status="ok", detail="符号仍在（无行号）"))
             continue
         if an.get("weak"):
             rows.append(dict(an, status="weak",
@@ -388,6 +453,19 @@ def self_test():
         (_all_blank(["def handler():", "    x = 1"], [2]), False),
         (_all_blank(["def handler():", "    x = 1"], []), False),
         (_all_blank(["a", "b", "c"], [2, 3]), False),
+        # 2026-11-17 补：区间形状的行号以前抽不出来。「实测为 105-113 行」整条锚点在门禁之外。
+        (window_nums("实测为 105-113 行"), [105, 113]),
+        (window_nums("旧行号 1055-1150、1693-2049 已失效"), []),
+        (window_nums("def :150、调用 :180、回写 :184"), [150, 180, 184]),
+        # 符号锚只认文档规定的「文件:符号名」两种写法，散文里的词不算锚点
+        (_anchor_symbol_span(" : MESSAGE_PLANE_PAYLOAD_MAX_BYTES 常量块"),
+         ["MESSAGE_PLANE_PAYLOAD_MAX_BYTES"]),
+        (_anchor_symbol_span(" 的 `build_plugin_server_app` 形参"), ["build_plugin_server_app"]),
+        (_anchor_symbol_span(": _definition；无对话历史 = x"), ["_definition"]),
+        (_anchor_symbol_span("（下行起的 13 个行号读于 db81c1be0）"), []),
+        (_anchor_symbol_span(" 里是 handler 函数"), []),
+        (_anchor_symbol_span(": TaskAgentManager._brief；另一处 = RpcDispatcher.submit"),
+         ["TaskAgentManager._brief"]),
     ]
     # 2026-11-17 补：1MB 以上的文件必须走 raw 端点拿正文。Contents API 对这种文件返回 200
     # 但不带 content，旧版把它算成「取不到」，探针会天天退 2 却不给出任何结论。
@@ -450,6 +528,36 @@ def self_test():
                             get_raw=lambda u: (fake_src.encode("utf-8"), None),
                             cache_dir=tempfile.mkdtemp(prefix="drift-big-"))[0]["status"]
             cases.append((got_big, "ok"))
+            # 符号锚（只有「文件:符号名」没有行号）也要过 check：上游删了符号就得报漂移。
+            src_with = ("class TaskAgentManager:" + NL + "    def _brief(self):" + NL +
+                        "        return 1" + NL)
+            src_wo = "class Other:" + NL + "    def _brief(self):" + NL + "        pass" + NL
+
+            def an_sym(syms):
+                return {"path": "plugin/a.py", "line": 1, "nums": [], "tokens": [],
+                        "weak": False, "syms": syms, "symbol_only": True}
+
+            def get_body(url, b64s=None):
+                return {"content": b64s}, None
+
+            b_with = base64.b64encode(src_with.encode("utf-8")).decode("ascii")
+            b_wo = base64.b64encode(src_wo.encode("utf-8")).decode("ascii")
+            c3 = tempfile.mkdtemp(prefix="drift-sym-")
+            st_dot = check([an_sym(["TaskAgentManager._brief"])], "aaaa1111aaaa",
+                           get=lambda u: get_body(u, b_with), cache_dir=c3)[0]["status"]
+            cases.append((st_dot, "ok"))
+            st_gone = check([an_sym(["RpcDispatcher.submit"])], "bbbb2222bbbb",
+                            get=lambda u: get_body(u, b_with), cache_dir=c3)[0]["status"]
+            cases.append((st_gone, "drift"))
+            st_plain = check([an_sym(["_brief"])], "cccc3333cccc",
+                             get=lambda u: get_body(u, b_wo), cache_dir=c3)[0]["status"]
+            cases.append((st_plain, "ok"))
+            shutil.rmtree(c3, ignore_errors=True)
+            # collect() 必须真的把「文件:符号名」这种写法抽成锚点，否则上面这些都是死代码
+            cases.append((bool([a for a in collect("见 plugin/x.py: handler_def 那一处")
+                                if a.get("symbol_only")]), True))
+            cases.append((bool([a for a in collect("见 plugin/x.py（读于 sha）")
+                                if a.get("symbol_only")]), False))
         finally:
             shutil.rmtree(cache2, ignore_errors=True)
     finally:
