@@ -125,9 +125,11 @@ python $S plugin-rm --root <ROOT> --id <插件id>          # 撤掉插件，恢�
 | 发了信号但进程没退（它抓住了 SIGTERM 又没收尾） | 不动状态文件，打印端口可能还被占着 | 只在 POSIX 有用：带 `--force` 重跑会补发 SIGKILL。Windows 的 taskkill 本来就带 `/F`，`--force` 在这边不改变行为，重跑只是再发一次同样的命令 |
 | 信号发不出去（进程不归本机用户，`PermissionError`） | 不发信号、不动状态文件，日志写明这个 pid 不是沙箱能停的东西 | 不用：`--force` 也发不出去，别把 force 当「无视权限」 |
 | pid 已不存在（服务崩了，或 `start` 超时后自行终止） | 只清状态文件 | 不用 |
+| `taskkill` 起不来（没装、被挡、OSError） | 不发第二道信号、不动状态文件，日志写明是 taskkill 起不来 | 不用：强也强不起来，先修工具链 |
 | pid 属于别的进程（重启后复用） | 不杀，只清状态文件，并提示人工核对端口 | 不用，也不许用：force 的意思不是「是别人的进程也照杀」 |
 | 命令行读不到、进程还在 | 拒绝动手，报原因 | 核对端口归属后带 `--force` 重跑 |
 
+两条硬规矩：SIGKILL 只在 POSIX 且明确带 `--force` 时才发——不带 force 就升级等于击毙想收尾的插件；Windows 的 taskkill 本来就带 `/T /F`，`--force` 在这边不改变行为。两条都由自检钉住（工单 W07）。
 读命令行与确认退出都分平台：Windows 用一条 PowerShell 同时给出「进程在不在」与命令行，
 确认阶段改用稀疏探测格子（0.4 / 1.0 / 2.0 秒），因为每次探测要起一个 PowerShell。
 Linux 读 `/proc/<pid>/cmdline` 与 `/proc/<pid>/stat`。macOS 没有 `/proc`，退回 `ps -p <pid> -o command=`

@@ -808,6 +808,17 @@ session_id / source / hook_event_name」。删掉解析就同时改了一条对�
 - 一处工具教训：反证脚本原本把「日志里出现 PermissionError」当失败信号——那是 kill 用例的预期输出。
   改成只认自检自己的 `FAIL:` 行与 SELF-TEST 汇总行
 
+### 工单 W07：`_kill_pid` 的三个放走形状
+
+- 三条都在自检里钉死了，撤一条就红（实跑三臂各退 1，理由逐条对得上）：
+  M1 撤 `if not force` → `没带 --force 也发了 SIGKILL(9)`；
+  M2 Windows 腿丢 `steps=` → `Windows 腿丢了 steps=(0.4, 1.0, 2.0)`；
+  M3 `taskkill` 失败改回 `return True` → `taskkill 起不来时返回 True，应当 False`
+- 顺带修一处真缺陷：`taskkill` 起不来（没装、被挡）原本把 `OSError` 冒到 `cmd_stop`，
+  现在捕获、说明原因并回 `False`——既不谎报「已停止」也不崩
+- 新增判据：`wait` 收到的 `timeout` 必须是 `KILL_WAIT`；POSIX 腿不许带 `steps`
+- 沙箱自检 201 → 202 项；SKILL.md 走向表补一行「taskkill 起不来」并写明 SIGKILL 的两条形条件
+
 ### 仍未处理（写清楚，不算已解决）
 
 - `--include-docs` 没接进 CI：本仓文档里有大量示例文本会撞 SEC-1/3/4，逐条人工判过才能豁免。

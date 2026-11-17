@@ -906,8 +906,15 @@ def _kill_pid(pid, force=False, nt=None, kill=None, call=None, wait=None):
     is_nt = (os.name == "nt") if nt is None else nt
     wait = wait or _wait_gone
     if is_nt:
-        (call or subprocess.call)(["taskkill", "/PID", str(pid), "/T", "/F"],
-                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        try:
+            (call or subprocess.call)(["taskkill", "/PID", str(pid), "/T", "/F"],
+                                      stdout=subprocess.DEVNULL,
+                                      stderr=subprocess.DEVNULL)
+        except OSError as e:
+            # taskkill 起不来时既不能谎报「已停止」，也不能把 traceback 冒到 cmd_stop。
+            # 上一轮的写法是 except Exception: return True——那是把假绿写进异常处理里。
+            log(f"pid={pid} 停不掉：taskkill 起不来（{type(e).__name__}: {str(e)[:80]}）")
+            return False
         return wait(pid, KILL_WAIT, steps=NT_WAIT_STEPS)
     do_kill = kill or os.kill
     try:
@@ -1345,6 +1352,19 @@ def _self_test():
         (False, [PermissionError()], False, False, False, "不归本机用户 = 不许说已停"),
         (False, [None, PermissionError()], True, False, False, "SIGKILL 也发不出去 = 不许说已停"),
     ]
+    # taskkill 起不来：必须回 False。既不许谎报「已停」，也不许把 OSError 冒到 cmd_stop
+    def _boom(a, **kw):
+        raise OSError(2, "No such file or directory: taskkill")
+
+    try:
+        got_bad = _kill_pid(242, force=False, nt=True, kill=lambda p, s: None,
+                            call=_boom, wait=lambda p, timeout, **kw: True)
+        if got_bad is not False:
+            bad.append("taskkill 起不来时返回 %s，应当 False（谎报「已停止」就是从这里进来的）"
+                       % got_bad)
+    except OSError:
+        bad.append("taskkill 起不来时把异常冒到调用方了")
+    kill_extra_n = 1
     for k_nt, k_sigs, k_force, k_wait, k_want, k_note in kill_cases:
         it = iter(k_sigs)
         sent = []
@@ -1357,9 +1377,14 @@ def _self_test():
             return r
 
         calls = []
+        seen_kwargs = []
+
+        def _wait(p, timeout, **kw):
+            seen_kwargs.append((p, timeout, kw))
+            return k_wait
+
         got_k = _kill_pid(242, force=k_force, nt=k_nt, kill=_kill,
-                          call=lambda a, **kw: calls.append(a),
-                          wait=lambda p, timeout, **kw: k_wait)
+                          call=lambda a, **kw: calls.append(a), wait=_wait)
         if got_k is not k_want:
             bad.append("%s：_kill_pid 得到 %s 期望 %s" % (k_note, got_k, k_want))
         if k_nt and (not calls or "/T" not in calls[0] or "/F" not in calls[0]):
@@ -1368,6 +1393,21 @@ def _self_test():
             bad.append("--force 那条应补发 SIGKILL(9)，实发 %s" % sent)
         if k_nt and sent:
             bad.append("Windows 那条不该走 os.kill，实发 %s" % sent)
+        # M1：没带 --force 却升级 SIGKILL，等于击毙想收尾的插件——文档立的规矩
+        if not k_force and 9 in sent:
+            bad.append("%s：没带 --force 也发了 SIGKILL(9)" % k_note)
+        # M2：Windows 的稀疏格子必须原样传下去，丢了 steps 就套上 POSIX 的密格子
+        if k_nt:
+            if not seen_kwargs:
+                bad.append("%s：Windows 腿没调 wait" % k_note)
+            elif seen_kwargs[0][2].get("steps") != NT_WAIT_STEPS:
+                bad.append("%s：Windows 腿丢了 steps=%s，实得 %r"
+                           % (k_note, NT_WAIT_STEPS, seen_kwargs[0][2]))
+        elif seen_kwargs and seen_kwargs[0][2].get("steps") is not None:
+            bad.append("%s：POSIX 腿不该带 steps（用默认密格子），实得 %r"
+                       % (k_note, seen_kwargs[0][2]))
+        if seen_kwargs and seen_kwargs[0][1] != KILL_WAIT:
+            bad.append("%s：确认超时没传 KILL_WAIT，实得 %s" % (k_note, seen_kwargs[0][1]))
     wg_n = 0
     seen = []
 
@@ -1733,7 +1773,8 @@ def _self_test():
     total = cf_n + jc_n + (len(keep) + len(drop) + len(bad_ids) + len(good_ids) + len(stop_cases)
              + len(verdict_cases) + len(posix_cases) + len(no_ps_cases)
              + len(stat_cases) + len(alive_cases) + wg_n + len(x_tomls) + len(x_flags)
-             + len(x_rows) + x_n + hw_n + ra_n + len(kill_cases) + pa_n) + _symlink_cases(bad)
+             + len(x_rows) + x_n + hw_n + ra_n + len(kill_cases) + kill_extra_n
+             + pa_n) + _symlink_cases(bad)
     print("SANDBOX SELF-TEST: %s（%d 项）" % ("PASS" if not bad else "FAIL", total))
     for m in bad:
         print("  FAIL:", m)
