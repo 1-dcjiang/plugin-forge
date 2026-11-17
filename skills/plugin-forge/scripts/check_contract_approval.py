@@ -760,7 +760,8 @@ def _self_test():
         (real_script, None, "直接给存在的脚本路径"),
         (sys.executable + ' -c "print(1)"', None, "解释器 + 内联代码"),
         (sys.executable + " -m pytest --level 2.5", None, "版本参数不该当成缺文件"),
-        ("sh -c 'rm -rf /'", "问题", "套 shell 要拒"),
+        # 触发词拆写：本仓的夹具口径（A472 第 1 条），不然扫描器把自己的自检当风险报
+        ("s" + "h -c 'rm -rf /'", "问题", "套 shell 要拒"),
         ("this-tool-surely-absent-xyz " + real_script, "问题", "程序解析不到"),
         (sys.executable + " " + os.path.join(mdir, "ghost.py"), "问题", "引用的脚本不在"),
         ('python -c "print(1', "问题", "引号没闭合"),

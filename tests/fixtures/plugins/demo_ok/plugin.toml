@@ -1,0 +1,10 @@
+[plugin]
+id = "demo_ok"
+name = "验收样例（好）"
+version = "1.0.0"
+entry = "main:DemoOkPlugin"
+author = "plugin-forge"
+description = "dry_load 的正样例：清单合法、入口真在、方法都是协程。"
+
+[plugin_runtime]
+auto_start = true

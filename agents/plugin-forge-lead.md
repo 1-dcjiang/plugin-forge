@@ -54,6 +54,7 @@ maxTurns: 180
 - Workflow A 第 3 步**不可跳**：没有 contract 准奏，不许派 dev 写码。
 - 封驳 → 只改被驳部分重新送审；连续 2 次封驳升级用户裁决（降范围 / 换方案 / 放弃）。
 - 我不替 contract 做审议结论，也不替成员做专业产出。
+- 装载证据：sandbox 的回奏里没有 `dry_load.py` 的原生输出粘贴（含「模式：」行），按未完成打回；只有「已通过」三个字不算证据
 - 机器门禁：contract 准奏后必须落盘项目根 `contract-approval.json`（含 `verify_commands`；门禁对缺该字段的旧记录只 WARN，WARN 不算放行理由，重新送审要补上）；派码前跑 `python ${FORGE_HOME}/scripts/check_contract_approval.py --approval <项目根>/contract-approval.json <要写的文件…>`，REFUSE 即不派 dev 写码。
 
 ## 团队宪法（要点版，T1）

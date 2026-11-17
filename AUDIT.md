@@ -682,6 +682,36 @@ session_id / source / hook_event_name」。删掉解析就同时改了一条对�
 - 扫描器自检补上「超过 2 MiB 的文件也要在未读账上点名」这一例（`_run(["--fail-unclear"])`）。
   例数 110 → 112，实跑通过。
 
+## 2026-11-17 晚 · 「全部推进」第 1–2 条（验收命令进契约 / 干装载）
+
+第 1 条 `verify_commands`（提交 2ee255f）
+- schema 加必填字段；门禁逐条核命令可解析、引用文件真在；核不过对所有目标一致拒绝；
+  缺字段的旧记录只 WARN（硬拒会把历史准奏全打断，这条取舍写在 schema 描述里）
+- 三个自己踩到的坑：① `shlex` 在 Windows 上吃掉反斜杠，绝对路径全被判成「找不到」；
+  ② 参数用「含点号」判文件会把 `--level 2.5` 误报成缺文件，改成后缀表；
+  ③ 我在补文档的脚本里把 `rep()` 写成不接返回值，整段静默空转，
+  靠「锚点必须命中 1 次」的断言与实跑暴露出来
+- 反向对照 11 组（`~/forge-scratch/run_controls12.py`）全部咬住
+
+第 2 条 `dry_load.py`（新脚本 640 行，含 25 例自检）
+- 真装载调上游 `plugin/core/host.py:649` 的 `_import_plugin_module`，不自己模拟 import：
+  模拟版会放行一些宿主其实装不进的插件
+- 实测跑通：内置 `web_search` @ neko_host `b20a9f8` + 它的 .venv →
+  模式 `real-import`，结果行 `symbol_found=true, symbol_type=type, is_class=true`，退 0
+- 降级模式在输出里明写「证明不了能不能真的 import」与原因；宿主侧不可用不算插件问题
+- 判据都核对过上游原文：目录名==id、`entry` 形状、`plugin.plugins.<id>` 包写法
+  （内置 11 件全用它，`host.py:664` 要求第二段等于目录名）、类入口带 `@neko_plugin`
+  （内置 11 件实测计数）、`auto_start` 缺省按 false（`registry.py:1293`）、
+  `[plugin.host]` 已移除（`schema.py:18、233-235`）
+- 真装载那条腿每轮自检都跑到：假 SDK 里放同签名 `_import_plugin_module`，
+  覆盖 stderr 噪音、import 期抛异常、入口符号改名三种形状
+- 反证 13 组（`~/forge-scratch/run_controls13.py`）10 项全部符合预期；
+  其中「结果行退回取最后一行」这一项第一次没咬住——因为噪音当时只打 stdout，
+  结果行本来就是最后一行。改成 stderr 噪音后才真钉住，这条教训记在这里
+- CI 加两步：`dry_load --self-test`、`dry_load --demo-check`，都阻塞
+- 扫描分数从 90 回到 95：新夹具里的 `sh -c` 字面量把自己报成 SEC-3，
+  按本仓「夹具拆写」口径改掉，没有加第 4 条豁免
+
 ### 仍未处理（写清楚，不算已解决）
 
 - `--include-docs` 没接进 CI：本仓文档里有大量示例文本会撞 SEC-1/3/4，逐条人工判过才能豁免。

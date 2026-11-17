@@ -59,10 +59,42 @@ description: 基于 N.E.K.O 官方仓库搭建隔离的插件运行时沙箱：�
 ③ 新增 autostart 前置条件与验证用路由两行——旧版把「插件没 autostart」只归因于目录名和嵌入标志，
 现在这两条都不是主因了。
 
+## 第 0 步：干装载（dry_load.py）
+
+它回答「这个插件装载得起来吗」。有宿主环境时，它调上游自己的导入函数
+`plugin/core/host.py:649` 的 `_import_plugin_module` 真装载一次；环境不全时降级为 AST 级检查，
+并在输出里明写「降级模式证明不了能不能真的 import」与降级原因。
+
+```bash
+D=skills/neko-plugin-sandbox/scripts/dry_load.py
+python $D <插件目录>                                                    # 自动探沙箱 config
+python $D <插件目录> --python <venv 的 python> --neko-repo <官方源码目录>      # 显式指定
+python $D --demo-check                                                 # 仓内对照样例（CI 用）
+python $D --self-test                                                  # 自检（CI 用）
+```
+
+退出码：0 通过；1 发现问题；2 用法或环境错误。**「模式：」那一行必看**——
+`real-import` 是真装载过；`ast-fallback` 只是静态检查，别把它汇报成真装载过。
+
+| 核什么 | 依据（本机 neko_host @ b20a9f8 核对，上游钉 e14f61963） |
+|---|---|
+| 目录名等于 `[plugin].id` | 宿主按目录名扫描，不一致进不了 `/plugins` |
+| `entry` 形状 `module:Symbol` | `plugin/config/schema.py:214` 的 pattern |
+| `main` 与 `plugin.plugins.<id>` 两种写法都合法 | 内置 11 件全用包写法；`plugin/core/host.py:664` 的 `parts[1] != directory.name` 就是要求第二段等于目录名 |
+| 类入口带 `@neko_plugin`，入口方法是协程 | 内置件 11 个类全带该装饰（实测计数） |
+| 没写 `[plugin_runtime] auto_start` 要报 | `plugin/core/registry.py:1293` 的 `auto_start_val = False` 就是按 false 处理 |
+| 写了 `[plugin.host]` 要报 | 上游已移除该节，import 期直接报错 |
+| 真装载子进程环境要隔离 | `LOCALAPPDATA`/`TEMP`/`HOME` 指到临时根，凭据形状变量删掉 |
+
+真装载那条腿每轮自检都跑到：假 SDK 里放一个同签名的 `_import_plugin_module`，
+噪音走 stderr、import 期抛异常、入口符号改名三种形状各有用例。
+
 ## 标准流程
 
 ```bash
 S=skills/neko-plugin-sandbox/scripts/sandbox.py
+
+python skills/neko-plugin-sandbox/scripts/dry_load.py <插件目录>   # 第 0 步：先干装载
 
 python $S doctor    --root <ROOT>                        # 前置检查
 python $S prepare   --root <ROOT> --repo <已有源码目录>   # 挂载已有 checkout（推荐，免克隆）

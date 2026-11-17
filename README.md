@@ -33,7 +33,7 @@ N.E.K.O 是 Apache-2.0 项目。本仓库只引用它的路由、契约、端口
 
 - 契约先行：`agents/plugin-forge-contract.md` 持真实否决权，没有准奏不写码。准奏落盘 `contract-approval.json`（含 `verify_commands`：每条都得是能直接跑起来的验收命令），写码前由 `skills/plugin-forge/scripts/check_contract_approval.py` 机器校验；scope 外的文件同样拒绝。
 - 先搜后建（rbb）：Workflow A 第 1a 步做三轮检索，判决取加入上游 / 做官方扩展 / 分叉并保持同步 / 自建四档之一，小改动走快速档。权威本体是上游插件 reuse_before_build，本团只引用不内嵌。条文见 skills/plugin-forge/SKILL.md 铁律 3 与 skills/plugin-forge/references/workflows.md。
-- TDD + 极简 + 安全门禁 + 运行时验证（`skills/neko-plugin-sandbox/` 真实冒烟）。
+- TDD + 极简 + 安全门禁 + 运行时验证（`skills/neko-plugin-sandbox/` 真实冒烟；`dry_load.py` 做干装载：有宿主环境就调上游自己的导入函数真装载一次，环境不全就降级为 AST 级检查并在输出里明写降级原因）。
 - 工作流 H：宿主破坏性变更（RFC/changelog）对插件机队的影响审计与上游回帖礼仪。
 - 双风格文档门禁：`plugin-forge-docs` 内置 ASD-STE100 + humanizer（中英同等），见 `skills/plugin-forge/references/style-anti-slop.md`；外部内容入库先过 `AUDIT.md` 流程（四项安全检查与评分规则见 `skills/plugin-forge/references/security-checklist.md`）。
 - 平台 profile：N.E.K.O 平台契约的**本地权威** `skills/plugin-forge/references/profile-neko.md`（基线是哪一批 sha、分工怎么写，只在 profile 文首 ⓪ 那一处声明；这里不复述，免得两处各说各话。漂移由 `python scripts/profile_drift.py --strict` 在 CI 里对当前 main 逐条把门，一次核对 profile-neko.md 与沙箱 SKILL.md 两份文档）。它不是「唯一」权威，也不能替代上游：文首 ⓪ 陈旧门禁若返回 404，§3/§7 立即降为过期面，先按新 main 重核再用。与 workshop `rules.json` 的编号冲突时，以 §3 入口规则与 `AGENTS.md` 为准并在 AUDIT 记录。NEKO 扩展阅读在 `references/neko/`。

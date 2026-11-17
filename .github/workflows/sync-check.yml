@@ -34,6 +34,10 @@ jobs:
         run: python skills/plugin-forge/scripts/security_audit.py --self-test
       - name: Sandbox self-test
         run: python skills/neko-plugin-sandbox/scripts/sandbox.py --self-test
+      - name: 干装载自检（阻塞）
+        run: python skills/neko-plugin-sandbox/scripts/dry_load.py --self-test
+      - name: 干装载对照样例（阻塞：好样例退 0、坏样例退 1）
+        run: python skills/neko-plugin-sandbox/scripts/dry_load.py --demo-check
       - name: Drift probe self-test
         run: python scripts/profile_drift.py --self-test
       - name: SessionStart 能力刷新自检
