@@ -192,7 +192,7 @@ gh api repos/Project-N-E-K-O/N.E.K.O/contents/scripts/custom_channels/neko_chann
 
 ## 8. 生态与市场
 - 市场：<https://project-neko.online/zh-CN/plugins/>；仓库：`Project-N-E-K-O/N.E.K.O`（个人 fork 属主用 `gh api user -q .login` 探测，勿写死——本机账号已由 addsas222 改名 HorizonCloudy，旧名 URL 靠 GitHub 重定向续命，但 gh 按旧名 list/搜索会挂）。
-- 开发教程：仓库 `docs/plugins/`（sdk-reference.md / entries.md / tool-calling.md 等，旧 `plugin/PLUGIN_DEVELOPMENT_GUIDE.md` 已从 main 删除，发布检查清单的现落点待核 —— 见 decisions）；脚手架：`uv run neko-plugin init <id>`。
+- 开发教程：仓库 `docs/plugins/`（sdk-reference.md / entries.md / tool-calling.md 等，旧 `plugin/PLUGIN_DEVELOPMENT_GUIDE.md` 已从 main 删除，发布检查清单现在 `docs/plugins/cli.md:309` 的 `One-page checklist` 一节，另一份散在 `docs/plugins/best-practices.md:220` 的 `Plugin checklist`，对当前 main 实读于 2026-11-18）；脚手架：`uv run neko-plugin init <id>`。
 - 宿主侧市场桥接前缀 `/market`（catalog / submissions / install / oauth / status 等）
   `[FACT] plugin/server/routes/market_bridge.py: router = APIRouter(prefix="/market")（:91 读于 db81c1be0，2026-11-17）`；同一文件里 `plugin/server/routes/market_bridge.py` 的四段路由：`catalog` 从 761 到 816、`submissions` 从 1060 到 1166、`install` 从 1709 到 1898、`oauth` 从 2109 到 2618。
   已失效的旧号（只作历史，不再当锚点）：87 与 757-812、1055-1150、1693-2049；2026-11-17 又失效一批：90、760-815、1059-1154、1708-1897、2108-2617。知识库桥 `/market/knowledge` `[FACT] plugin/server/routes/knowledge_bridge.py: router = APIRouter(prefix="/market/knowledge")（:48 读于 db81c1be0）`。

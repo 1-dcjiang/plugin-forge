@@ -1,6 +1,6 @@
 # NEKO 专家团 · 会话启动「完整更新」标准作业流程（SOP）
 
-> 结论先行：「每次会话开始时完整更新」的原生机制是 `SessionStart` + 上下文注入，官方事实已核验；但本工程**当前不挂任何 SessionStart hook**，是否启用须用户**单独显式同意**。自动化范围被严格限定为 **Sense（只读感知差异提醒）**，**绝不自动化 Act（安装或更新第三方 skill / 包 / MCP / 插件）**；每次引入第三方代码仍需人工安全审计。无差异时只报「基线一致，最后核验 2026-11-06」并**不改任何文件**；有差异才允许由主理人确认后改文件。
+> 结论先行：「每次会话开始时完整更新」的原生机制是 `SessionStart` + 上下文注入，官方事实已核验；但本工程**已在 `~/.workbuddy/settings.json` 的 `hooks.SessionStart` 挂载第 3 条**（2026-11-18 现读数：workbuddy 根 3 条、codebuddy 根 1 条，本工程只在 workbuddy 侧）。这次挂载早于下面的同意条款落笔，**追认或回滚都须用户单独显式同意**（见 §8 与 AUDIT 的 W08 条目）。自动化范围被严格限定为 **Sense（只读感知差异提醒）**，**绝不自动化 Act（安装或更新第三方 skill / 包 / MCP / 插件）**；每次引入第三方代码仍需人工安全审计。无差异时只报「基线一致，最后核验 `<BASELINE_DATE>`」并**不改任何文件**；有差异才允许由主理人确认后改文件。
 >
 > 本版相对前一版的实质变更：吸收 neko-security（云安）的 **5 点官方 Hook 语义专项修正**（见 §1.2），并据此重写 §5 去重、§6 降级、§0A 自动化边界、§8 挂载状态；**另补录 `~/.codebuddy` 配置根 3 条 `codebuddy-*` 自动执行 hook**（云安 `security-refresh-notes.md` §5 第 12 行 / §6 新发现），见 §1.4。
 
@@ -52,7 +52,10 @@
 → 这**推翻**了前一版 SOP「新 hook 的 command 字符串必须与现有 2 条 SessionStart 命令不同，否则会被去重」的说法，该说法是错的。同一 `hooks.SessionStart` 数组内可以并存多个不同 handler（本机现状已有 2 条）；需要检查的是**不要在其他 settings 层级复制粘贴同一个 handler**。
 
 **(c) SessionStart 纯文本 stdout 也会作为上下文注入。**
-不强制要求 JSON；纯文本 stdout 同样进入上下文。本方案**仍输出结构化 `HookOutput` JSON**，目的是保留 `continue` / `suppressOutput` / `systemMessage` 控制位，并利用 `additionalContext` 的明确注入位（见 d）；不因为「纯文本也行」就放弃结构化输出。
+不强制要求 JSON。纯文本 stdout 同样进入上下文。本方案**仍输出结构化 `HookOutput` JSON**，
+图的是 `additionalContext` 的位置与格式确定性（见 d）。
+2026-11-18 现读 `emit()` 与真跑 stdin：顶层只有 `hookSpecificOutput`，
+脚本**不写** `continue`、`suppressOutput`、`systemMessage` 三个控制位，放行由宿主自己决定。
 
 **(d) `hookSpecificOutput.additionalContext` 是不可见 system-reminder，位于第一条用户提示之前。**
 - 注入内容**用户不可见**、对模型可见，且**排在第一条 user prompt 之前**，会先于用户诉求影响模型判断。
@@ -101,7 +104,7 @@
 4. **就绪检查**：核对 8 个 hook 脚本存在性；任一缺失即记入差异（启动失败风险）。
 5. **生成当前快照**：MCP 启用/禁用清单、连接器目录项数、生效配置 hooks 事件/命令数、marketplace 目录与清单数、插件版本、skills 数、hook 脚本就绪数。
 6. **判定有无差异**：按 §3 规则。
-7. **输出上下文**：`continue:true` + `additionalContext`，内容按 §3 的幂等输出约定（无差异只报一句话 + 快照，不写文件）。
+7. **输出上下文**：只有 `hookSpecificOutput.additionalContext`，内容按 §3 的幂等输出约定（无差异只报一句话 + 快照，不写文件）。脚本不写 `continue` 字段，同段下一条与 `emit()` 为准。
    输出形态只有 `hookSpecificOutput.additionalContext`：脚本不写 `continue` 字段，宿主自己决定放行（2026-11-17 读 `emit()` 核对）；措辞须符合 §1.2-d 的客观、无指令要求。
 8. **会话内补齐（非 hook 阶段、MCP 就绪后）**：若需连接器运行时状态，显式调用 `list_installed_plugins`；若需远程版本，须用户确认后联网。此步**不属于**自动 hook（e）。
 9. **决策**：有差异时由主理人确认是否更新基线（§4）；**绝不**触发安装/升级动作（§0A）。
@@ -140,7 +143,7 @@
 
 > 三处必须**原子式同步**，否则下次会话会持续误报。刷新命令（只读，不改文件）：
 > ```bash
-> python "~/.workbuddy/plugins/marketplaces/my-experts/plugins/neko-plugin-ops/scripts/session_capability_refresh.py" --regen
+> python "~/.workbuddy/hooks/session_capability_refresh.py" --regen   # 挂载份是宿主真执行的那一份；要 --regen 就指它，别指安装态
 > ```
 > 这是**唯一允许改文件**的时机，且必须由主理人（不是 hook）执行；改的只是本专家团自己的文档与常量，**不是**安装或更新任何第三方组件。
 
@@ -163,7 +166,7 @@
 3. **超时层**：宿主 `timeout: 10`；脚本内置 **`SOFT_DEADLINE = monotonic() + 8.0s`**（`scripts/session_capability_refresh.py:39`），到点抛 `TimeoutError` 被捕获，输出固定单行降级文本 `FALLBACK_CONTEXT`，**不输出部分结果**（与脚本头「超时安全」那句同一口径），留 2 秒余量给 JSON 序列化与进程退出。
 4. **降级文本同样受 §1.2-d 约束**：客观陈述、不夹带指令、不诱导越权。
 
-> 已实测：正常 stdin / 空 stdin / 非法 JSON stdin 三路径均输出合法 JSON、`continue:true`、`exit 0`。
+> 已实测：正常 stdin / 空 stdin / 非法 JSON stdin 三路径均输出合法 JSON、`exit 0`，顶层键只有 `hookSpecificOutput`（2026-11-18 现读 `emit()`，并真跑 stdin 复核）。
 > 2026-11-17 补测：软截止路径同样只输出 `FALLBACK_CONTEXT` 一条（`--self-test` 里钉成断言，破坏它的那组反向对照立刻变红）。本节改的是对「输出什么」的描述，降级、不阻塞、合法 JSON、`exit 0` 四项契约没动。
 
 ## 7. 证据分级与「未联网核验项」标注规则
@@ -202,11 +205,11 @@ cp "~/.workbuddy/settings.json" "~/.workbuddy/settings.json.pre-neko-baseline-ho
 
 # 2) 确认 Python 与脚本语法
 python --version
-python -m py_compile "~/.workbuddy/plugins/marketplaces/my-experts/plugins/neko-plugin-ops/scripts/session_capability_refresh.py"
+python -m py_compile "~/.workbuddy/hooks/session_capability_refresh.py"
 
 # 3) 手动跑一次：应输出合法 JSON、结论「无变更」、exit 0
 echo '{"session_id":"manual","hook_event_name":"SessionStart","source":"startup"}' \
-  | python "~/.workbuddy/plugins/marketplaces/my-experts/plugins/neko-plugin-ops/scripts/session_capability_refresh.py" \
+  | python "~/.workbuddy/hooks/session_capability_refresh.py" \
   | python -m json.tool > /dev/null && echo "output JSON valid"
 
 # 4) 确认改的是推断生效根；并按 §1.2-b 检查「同一 handler 是否在其他 settings 层级重复定义」
@@ -260,7 +263,7 @@ cp "~/.workbuddy/settings.json.pre-neko-baseline-hook.bak" "~/.workbuddy/setting
 **现状**：2026-11-06 已部署 **H4 `cb2b02e04aa32b2cf61b9f884cdf13cce99ff75eb428785c617ecd4a2fcdfa08`**，`BASELINE` 中 `settings.workbuddy` 已刷新为 `02fb107c4263`，并新增 `backups.workbuddy` / `backups.codebuddy` 两项存在性计数（当前各 2）。部署后首跑恢复「**无变更（基线一致）**」，差异为空。
 
 **每次会话的信号判据**：
-- 差异列表为空 → 基线一致，只报「基线一致，最后核验 2026-11-06」，不写文件（幂等）。
+- 差异列表为空 → 基线一致，只报「基线一致，最后核验 `<BASELINE_DATE>`」，不写文件（幂等）。
 - 出现任何差异项 → **真实变更**，按本 SOP 正常流程逐项核对；有差异才改文件。
 - `settings.workbuddy` 当前值 ≠ `02fb107c4263` → 说明 hook 配置被改动（含卸载），按 `security-refresh-notes.md §10` T2 处理。
 - `backups.*` 不再是 2 → 备份类文件增删，按 T8 处理。

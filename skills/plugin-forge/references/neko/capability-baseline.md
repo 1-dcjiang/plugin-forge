@@ -166,7 +166,7 @@ for p in ('scripts/session_capability_refresh.py',
 PY
 ```
 
-同步口径要说准：`install_sync.py` 只管 `.codex` / `.claude` / `.zcode` 三棵 skill 树，
+同步口径要说准：`install_sync.py` 管 `.codex` / `.claude` / `.zcode` 三棵宿主的**四面**：skill 树（`skills/plugin-forge` 与 `skills/neko-plugin-sandbox` 两棵）、`agents/*.md` 人设、`codex/prompts/`（只有 `.codex` 有 prompts 目录）。预演输出按这四面分行报数，判覆盖面看输出别看本文。
 **它不碰 `~/.workbuddy/hooks/` 那份挂载副本，也不碰 marketplace 安装态**。
 那两处要单独复制；复制前先跑仓库脚本的 `--self-test`。别拿挂载态或安装态的输出当仓库结论。
 

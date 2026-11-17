@@ -1169,7 +1169,56 @@ PF 这条线是断的。
 自检 136 → 139 例。反证 31 两臂：撤豁免 → `docs/tutor.html` 回到被评分退 1；
 把豁免扩到全部 `.html` → 「八类扩展名应读进 8 个文件」与 `page.htm` 的 SEC-3 两条一起红。
 
-### 仍未处理（写清楚，不算已解决）
+
+### 工单 W19 十二条：文档欠报、自相矛盾、过期指认（逐条判完并落地）
+
+来源：外部核对报告 `forge-scratch/wf-out3/W19-文档逐条.md`。12 条全部 still-open，
+本轮逐条自己在现文上复验（不照抄报告的行号，报告给的 :47/:49 一类已漂，我按现文重定位）。
+
+已落地：
+
+- **W19.1** 沙箱 SKILL 不再抄环境变量名单，改指 `SECRET_ENV_RE` / `SECRET_ENV_SUB` / `KEEP_EXACT`，
+  并点名两个真实后果：`WT_SESSION`、`SESSION_ID` 会被删，`SSH_AUTH_SOCK`、`KEYBOARD`、`KEYMAP`、裸 `PWD` 保留。
+  实测旧文本比代码少 15 个词根与 3 个保留名（报告的差集脚本我重跑过）
+- **W19.2** `capability-baseline.md:169` 说 install_sync「只管三棵 skill 树」→ 改成四面口径
+  （skill 树两棵、`agents/*.md`、`codex/prompts/`），并注明判覆盖面看预演输出别看本文
+- **W19.3** SOP 首段「当前不挂任何 SessionStart hook」是旧状态。现读 `~/.workbuddy/settings.json`
+  的 `hooks.SessionStart` 有 3 条，第 3 条就是本工程挂载份；`~/.codebuddy` 侧 1 条未挂。
+  首段改成「已挂载，追认或回滚都须单独显式同意」，并把「最后核验」两处换成 `<BASELINE_DATE>`
+  （代码常量 `BASELINE_DATE = "2026-11-07"`，抄死日期就是下一次过期的源头）
+- **W19.4** 三处 `continue:true` 断言与实现矛盾。真跑 stdin 读顶层键：只有 `hookSpecificOutput`；
+  `emit()`（`scripts/session_capability_refresh.py:277-281`）不写 `continue`/`suppressOutput`/`systemMessage`。
+  三处都按实测改写。`:35` 那一行是官方文档结构表的引用，保留
+- **W19.5** 三处仍指 marketplace 安装态：`--regen` 与 `py_compile` 改指挂载份 `~/.workbuddy/hooks/…`，
+  与 `capability-baseline.md:150-152`「只认仓库份」不再打架
+- **W19.6** 人设裸相对路径实测 **8 处**（报告说 6 处，我自己扫出另两处：contract:38 的前缀写在路径之后
+  机器读不出、lead:111 是我本轮加 §6 接线时新引入的）。全部补 `${FORGE_HOME}` 前缀
+- **W19.7** docs 人设删掉写死的 `$HOME/.claude/skills/asd-ste100/...`，改「路径随宿主与安装位置变」，
+  保留没装就按清单自查的降级条款
+- **W19.8** 安全人设补「先跑机械分诊再人工复核」一步，命令与三个严格档旗标写全
+- **W19.9** NOTICE 的「every entry … in AUDIT.md」按实测改成按族落点（edict / mattpocock 三件 /
+  N.E.K.O Apache-2.0 在 AUDIT.md 里确实零命中）。选择改承诺而不是补三行摘要：
+  把别人文件的摘要当审计结论落盘，是第二次错
+- **W19.10** README 目录树补 `.claude-plugin/`、`tests/`、`pytest.ini`、`requirements-dev.txt`
+  （`tests` 那一族是 `468ec14` 加回归集时漏的）
+- **W19.11** `profile-neko.md:195` 的「发布检查清单现落点待核」换成实锚：
+  `docs/plugins/cli.md:309` 的 `One-page checklist` 与 `docs/plugins/best-practices.md:220` 的
+  `Plugin checklist`。这两条新锚由 `profile_drift --strict` 对当前 main 核过
+- **W19.12** 刷新脚本两处「不读用户目录」的口径与实测相反：`open()` 探针记到 3 个真实路径
+  （`~/.workbuddy/mcp.json`、`~/.workbuddy/settings.json`、安装态 `plugin.json`），
+  来源是 S10 那段跑 `main()` 时 `build_context` 用真实 ROOT。改成如实写「只读、不写」
+
+机器杆 `tests/test_docs_vs_code.py` 四条钉住 W19.1 / 19.9 / 19.10 / 19.12 这四类。
+反证 32：把四处修法分别撤回去，四条断言各自变红。pytest 从 43 项涨到 47 项。
+两条判据细节要说清：README 树判据不能按「含 roster.json」筛代码块，文末讲回归集那块也有
+`roster.json` 与 `agents`，筛错会把一切都判成缺；`profile-neko.md` 的新句子里
+「（2026-11-18 实读）」这种括号紧跟数字的写法会被 `window_nums` 认成行号，
+`--strict` 当场报「2026 超出该文件行数」——判据先拦了我自己写的句子。
+
+未落地两条：W19.6 与 W19.8 属人设文字，机器杆已有（`tests/test_agents_wiring.py`）；
+W12 与 W13 那三条指纹漂移与 6 条悬空 hook 注册仍在等你拍板，见下面「仍未处理」。
+
+### 仍未处理（写清楚，不算已解决）### 仍未处理（写清楚，不算已解决）
 
 - `--include-docs` 没接进 CI：本仓文档里有大量示例文本会撞 SEC-1/3/4，逐条人工判过才能豁免。
 - 探针默认覆盖面仍是两份文档。`references/neko/` 那 21 份也带行号形状（`host.py:11`、`schema.py:107` 这类），

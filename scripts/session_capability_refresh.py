@@ -22,7 +22,7 @@ NEKO 专家团 · SessionStart 能力底座变更检测 hook（只读 / 零依�
   - 永不阻塞：任何异常均被捕获，输出合法 HookOutput JSON 并 exit 0。
 
 维护
-  python session_capability_refresh.py --self-test  # 离线自检（CI 阻塞跑），不读用户目录也不写文件
+  python session_capability_refresh.py --self-test  # 离线自检（CI 阻塞跑）：不联网也不写文件；S10 那段跑 main()，会只读用户目录里的配置文件
   python session_capability_refresh.py --regen   # 只读打印当前指纹字典，用于刷新 BASELINE
   BASELINE 常量须与 references/capability-baseline.md 同步维护。
   已知例外: --regen 以 print 输出多行纯文本（非 HookOutput JSON）；禁止把 --regen 用于 hooks 命令。
@@ -288,7 +288,9 @@ def _fp_of(obj, extractor):
 
 
 def _self_test():
-    """离线自检：只测纯函数与注入接缝，不读用户目录，不联网。
+    """离线自检：不联网、不写文件。大部分用例走注入接缝，但 S10 那一段跑 main()，
+    它的 build_context 用的是真实 ROOT，会只读 ~/.workbuddy 与 ~/.codebuddy 下的配置文件
+    （2026-11-18 用 open() 探针实测到 3 个真实路径）。以前的口径说自检完全不碰用户目录，那句是错的。
 
     2026-11-17 加。这个 hook 每个会话都跑，以前 CI 只做 py_compile，等于零覆盖。
     重点钉三条：S8 的输出形态、S10 的永不阻塞、以及差异文本的截断。
