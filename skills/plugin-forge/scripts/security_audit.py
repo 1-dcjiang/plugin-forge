@@ -102,7 +102,7 @@ DECLARE_RE = re.compile(r"forge-declared:\s*(SEC-[1-5])\s+理由=(\S.*?)\s+"
 # 两种注释语法：`#`（脚本与 yml）与 HTML 注释 `<!-- -->`（md 与 html）。
 # 以前只有 `#` 一种，等于文档没有点位声明这条路——而文档里的教学示例正需要它：
 # 历史条目不许为了过门禁改字（那是造假），改措辞又会丢掉原来的形状（工单 W14）。
-DECLARE_BAD_RE = re.compile(r"(?:#|<!--)\s*forge-declared:")
+DECLARE_BAD_RE = re.compile(r"(?:#|<!--)\s*forge-declared:[^\n]*(?:理由=|复审=)")
 
 WRITE_RE = r"(?:open|rmtree|move|remove|unlink|rename|replace|write_text|write_bytes|mkdir|rmdir)\s*[({]"
 ABS = r"['\"](?:[A-Za-z]:[\\\\/]|/(?:etc|usr|var|home|root|proc|Users)/)"
@@ -1031,6 +1031,12 @@ def _self_test():
     ok_np, note_np = _declaration("x = 1  # forge-" + "declared: SEC-4 理由=只读 复审=2099-01-01")
     if ok_np is not False or "格式不合" not in note_np:
         helper_bad.append("缺出处段的声明被判成有效：%r" % (note_np,))
+    # 讲这条语法本身的说明文字不许被当成声明尝试：文档一定要写出标记样子，
+    # 旧写法（只看注释位置）会把每篇文档都判成畸形声明（工单 W14 落地时实测 2 处）
+    if _declaration("- 注释语法两种都认：脚本与 yml 用 `# forge-" + "declared: …`")[0] is not None:
+        helper_bad.append("讲语法的说明文字被当成了声明尝试")
+    if _declaration("x = 1  <!-- forge-" + "declared: SEC-2 理由=缺出处 复审=2099-01-01 -->")[0] is not False:
+        helper_bad.append("HTML 注释里的畸形声明没被判成无效（说明文字例外不能放掉真尝试）")
     if _covers("SEC-4", "x  # forge-" + "declared: SEC-2 理由=a 出处=AUDIT.md#s 复审=2099-01-01"):
         helper_bad.append("SEC-2 的声明能豁免 SEC-4 的命中")
     if not _covers("SEC-4", "x  # forge-" + "declared: SEC-4 理由=a 出处=AUDIT.md#s 复审=2099-01-01"):
