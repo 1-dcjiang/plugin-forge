@@ -819,6 +819,23 @@ session_id / source / hook_event_name」。删掉解析就同时改了一条对�
 - 新增判据：`wait` 收到的 `timeout` 必须是 `KILL_WAIT`；POSIX 腿不许带 `steps`
 - 沙箱自检 201 → 202 项；SKILL.md 走向表补一行「taskkill 起不来」并写明 SIGKILL 的两条形条件
 
+### 工单 W04 + O2：监控器对「值」失明
+
+- 旧自检只比键集合。把 `_ext_settings` 改成 `return {"hooks": {}, "enabledPlugins": {}}`
+  （键全在、值抽干），66 项全绿，而「有人往 settings.json 塞新 SessionStart hook」
+  这类漂移对监控完全失明——hook 集合正是这个监控器唯一要看的东西
+- 补两条正证：抽取器整值比较（`_ext_settings 留两项且值原样带出`）；
+  受控文件逐个改一次内容，对应指纹必须变（`值穿透: …`，共 5 条）
+- O2 是同型的弱断言：`ctx2.count("异常详") <= 8` 在只列 3 条时也为真，等于没断言。
+  改成整值断言，并把「条数上限」与「整段 2000 字上限」两条护栏拆成两个夹具
+  （原来同一个夹具测两条，短异常那组被字数护栏抢先截断，计数根本测不到）
+- 反证 19（`forge-scratch/run_controls19.py`）四臂实跑：
+  臂1 抽干值 rc=1，红在 `_ext_settings 抽干值要能被发现` + `值穿透: 改 settings.json…`；
+  臂2 marketplace 扫描恒量化 rc=1，红在 `值穿透: 改 marketplace 清单…`；
+  臂3a `notes[:3]` 与臂3b `notes[:20]` 各 rc=1（两个方向都能咬，旧的 `<= 8` 只咬得住 3b）；
+  臂4 未改动 rc=0
+- 能力刷新自检 66 → 72 项，全绿
+
 ### 仍未处理（写清楚，不算已解决）
 
 - `--include-docs` 没接进 CI：本仓文档里有大量示例文本会撞 SEC-1/3/4，逐条人工判过才能豁免。

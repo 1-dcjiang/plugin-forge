@@ -282,6 +282,11 @@ def emit(context):
     sys.stdout.write(json.dumps(payload, ensure_ascii=True) + "\n")
     sys.stdout.flush()
 
+def _fp_of(obj, extractor):
+    """辅助：同一个抽取器对两个不同内容算出的指纹必须不同。"""
+    return _fp(extractor(obj))
+
+
 def _self_test():
     """离线自检：只测纯函数与注入接缝，不读用户目录，不联网。
 
@@ -313,7 +318,13 @@ def _self_test():
     chk("_ext_mcp 按字典序且丢掉清单外的键",
         list(mcp) == ["a", "z"] and "extra" not in mcp["z"])
     st = _ext_settings({"hooks": {"H": 1}, "enabledPlugins": {"p": True}, "theme": "x"})
-    chk("_ext_settings 只留两项", sorted(st) == ["enabledPlugins", "hooks"])
+    # 整值比较，不比较键集合：只查键的话，把值抽干成 {} 也照样「通过」，
+    # 而 hook 集合正是这个监控器唯一要看的东西（工单 W04）
+    chk("_ext_settings 留两项且值原样带出",
+        st == {"hooks": {"H": 1}, "enabledPlugins": {"p": True}})
+    chk("_ext_settings 抽干值要能被发现",
+        _fp_of({"hooks": {"S": [{"hooks": [{"command": "evil"}]}]}}, _ext_settings)
+        != _fp_of({"hooks": {}}, _ext_settings))
     mk = _ext_mkt({"name": "m", "extra": 2,
                    "plugins": [{"name": "p", "version": "1", "source": "s", "junk": 1}]})
     chk("_ext_mkt 只留 name 与插件三字段",
@@ -425,7 +436,12 @@ def _self_test():
                              marketplace_dirs=[], skills_count=-1, skills_fp=""),
                          long_notes, read=ok_read, exists=all_there)
     chk("整段超 2000 字符时截到 2000 并打标记", len(ctx2) <= 2000 and ctx2.endswith("truncated=1"))
-    chk("异常条数只列 8 条", ctx2.count("异常详") <= 8)
+    # 条数上限 notes[:8] 是另一条独立护栏。用短异常 + 无差异基线，
+    # 免得被上面 2000 字那条护栏抢先截断；旧写法 ctx2.count(...) <= 8 只列 3 条也为真（工单 O2）
+    ctx3 = build_context(base, ["异常详%d" % i for i in range(9)],
+                         read=ok_read, exists=all_there)
+    chk("异常正好列 8 条、第 9 条不许出现",
+        ctx3.count("异常详") == 8 and "异常详8" not in ctx3)
     chk("证据行说明未联网核验", "[未联网核验]" in ctx)
     chk("有差异时补一句只读观测", "差异为只读观测结果" in ctx)
 
@@ -542,6 +558,41 @@ def _self_test():
         chk("扫描: skills 计数", cur["skills_count"] == 2)
         chk("扫描: 备份计数", cur["scalars"]["backups.workbuddy"] == 1)
         chk("扫描: 清单指纹", len(cur["scalars"]["plugin.neko-plugin-ops"]) == 12)
+
+        # 值穿透：每个受控目标改一次内容，对应指纹必须变。
+        # 这一组是工单 W04 的正证——旧自检只查键名，把 hooks 的值换成 {} 也全绿。
+        prev = dict(cur["scalars"])
+        prev_mkt = json.dumps(cur["marketplaces"], sort_keys=True)
+        steps = [
+            (os.path.join(wb, "settings.json"),
+             '{"hooks": {"X": [], "NEW": [{"hooks": [{"command": "evil"}]}]},'
+             ' "enabledPlugins": {}}', "settings.workbuddy"),
+            (os.path.join(wb, "mcp.json"),
+             '{"mcpServers": {"a": {"command": "x", "env": {"K": "v"}},'
+             ' "b": {"url": "http://127.0.0.1:9/m"}}}', "mcp.workbuddy"),
+            # 连接器目录加一个服务器：计数必须跟着动，不然说明目标指错了文件
+            (os.path.join(wb, "connectors", "default", "mcp.json"),
+             '{"mcpServers": {"a": {"disabled": true}, "b": {}, "c": {}}}',
+             "mcp.catalog.count"),
+            (os.path.join(mkt, "demo", ".codebuddy-plugin", "marketplace.json"),
+             '{"version": "1", "plugins": [{"id": "p1"}, {"id": "p2"}, {"id": "p3"}]}',
+             "__MARKETPLACES__"),
+            (os.path.join(mkt, "demo", "plugins", "neko-plugin-ops", ".codebuddy-plugin",
+                          "plugin.json"), '{"name": "neko-plugin-ops", "version": "2"}',
+             "plugin.neko-plugin-ops"),
+        ]
+        for path, body, key in steps:
+            _mk(path, body)
+            cur_x, _tx, _nx = collect_fingerprints()
+            if key == "__MARKETPLACES__":
+                now_mkt = json.dumps(cur_x["marketplaces"], sort_keys=True)
+                chk("值穿透: 改 marketplace 清单要反映到台账", now_mkt != prev_mkt)
+                prev_mkt = now_mkt
+            else:
+                chk("值穿透: 改 %s 的内容必须动 %s"
+                    % (os.path.basename(path), key),
+                    cur_x["scalars"].get(key) != prev.get(key))
+                prev = dict(cur_x["scalars"])
 
         # 坏 JSON：解析失败要记 <UNREADABLE> 并留一条说明，不许抛出去。
         # catalog 计数走另一个文件：它坏了要记 -1，也不能把整轮扫描带崩。
