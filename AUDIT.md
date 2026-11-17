@@ -124,7 +124,7 @@ N.E.K.O 服务与 git/uv/pip 都不读它们。自检名单随之扩充（项数
 | 11 CI 没写 permissions | 已加 `permissions: contents: read`。actions 仍按 tag 引用，改 SHA 固定属供应链加固的另一件事，未在本轮 |
 | 12 contract.md 同一行既写「我落盘」又写「我不代写」 | 属实。改成一人认领：契约审议师出裁决文本，主理人写文件，`issued_by` 是自证字符串不当凭据（指向 issue #4） |
 | 13 sandbox 自检覆盖面窄 | 属实。`pid` 复用判断在 A571 轮关闭，`toml_section_value`、`_plugin_rows`、超时夹紧在 2026-11-16 精简轮收尾关闭，见「A464 第 13 条收尾」 |
-| 14 `password = user_input_value` 误报 | 已知取舍，`references/security-checklist.md` 已写明。报告建议的「右值像普通变量名就降级提示」是产品建议，未做 |
+| 14 `password = user_input_value` 误报 | 已知取舍，`references/security-checklist.md` 已写明。报告建议的「右值像普通变量名就降级提示」是产品建议，未做 <!-- forge-declared: SEC-2 理由=本行在记录这条误报本身，引的是形状不是凭据 出处=AUDIT.md#sec-declared 复审=2026-12-15 --> |
 
 反向对照（撤掉修复看自检是否报错）：撤掉 `secret_name_hits` 的接入 → `SELF-TEST FAIL: id_rsa 按文件名没计进 SEC-2，入库私钥仍会被放行`。实跑口径：含 `id_rsa` 与 `server.pfx` 的目录 → SEC-2 2 处、85/100、阻断退出 2；只含 `cert.pem` 与 `app.key` 的目录 → 不阻断，但真盲区 2，`--fail-unclear` 退 3。
 
@@ -332,7 +332,7 @@ DETACHED 那半个仍没覆盖：它只在 Windows 真起进程时才走得到�
 `NSString *token = @"真实口令"` 以前不报，因为值字符类在引号前先撞上 `@`，取到的值只剩一个字符，够不上
 `MIN_SECRET_LEN`。修法是一个字符：值的引号位前加 `@?`。
 
-- 前后实测（`secret_assignments` 单行）：`NSString *token = @"abcdefghijkl12"` 从 False 变 True。
+- 前后实测（`secret_assignments` 单行）：`NSString *token = @"abcdefghijkl12"` 从 False 变 True。 <!-- forge-declared: SEC-2 理由=Obj-C 测试字面量，记录判据前后行为用，不是凭据 出处=AUDIT.md#sec-declared 复审=2026-12-15 -->
   `char *password = "..."` 本来就报，不受影响。短值 `@"sh"` 仍不报，没有把它放宽。
 - 自检加 2 例（一真一假），例数从 93 升到 95。控制 E5 把 `@?` 撤掉，那条真例立刻变红。
 - 本仓扫描不变：仍 SEC-1 1 处、SEC-2 0 处、95/100 放行，没带来新误报。
@@ -1074,6 +1074,57 @@ stray 回到「已修复」退 0、行尾被归一化、BOM 消失）。
   `--write` 会把历史数字改成现值（等于造假）；补进 `COUNT_EXEMPT` 才安全，但错误文案没提这条路。
   要拍的是：给账本一类文件一个模式化豁免（例如 `docs/decision-log-*.md` 或首行标记），
   还是改错误文案指明「历史账本请进 COUNT_EXEMPT」
+
+### 工单 W14：CI 第一次读文档，根因是右值字符类，不是文档写错了
+
+来源：外部核对报告 `forge-scratch/wf-out3/W14-W17-文档面门禁.md`。现状实测：CI 那一步
+`security_audit.py .` 不带 `--include-docs`，`.md` 一个字都不读；带上以后 SEC-2 报 6 处，
+**6 处全是教学示例，没有一处真凭据**。
+
+根因在扫描器，不在文档（这一点报告只说对一半，我按根因修）：
+`secret_assignments` 的右值字符类只排 ASCII 空白与 `,;{}()`，反引号与中日韩标点都算值字符。
+于是文档里 `` `max_tokens=MAX_TOKENS`）、类型标注 `` 的右值一路吃到下一个 ASCII 空格，
+带着反引号与汉字，`CODE_VALUE_RE` 的全大写排除失效；同一行相邻的
+`` `OPENAI_API_KEY=`、`DB_PASSWORD=`、… `` 被并成一个长值吞掉。
+实测逐条：修复前 6 处，修完右值字符类（加 `、。「」（）…`、全角区、反引号）之后只剩 3 处，
+那 3 处是字面量形状的教学示例，改走点位声明。
+
+第二条根因是机制缺口：文档没有 `#` 注释语法，`DECLARE_BAD_RE` 只认 `#`，
+等于**文档没有点位声明这条路**。不补它就只能改历史条目文字来过门禁，那是造假。
+现在 `#` 与 `<!-- -->` 两种都认，`_declaration` 直接问出来的三态验过：
+合法 HTML 声明 (True)、缺出处 (False, 格式不合)、没写 (None)。
+
+落地四条：
+
+1. `security_audit.py`：右值字符类加中文标点/全角/反引号截断点；`DECLARE_BAD_RE` 认 HTML 注释
+2. 自检补两条：HTML 注释声明有效、缺出处的 HTML 声明判畸形（130 例仍全过）
+3. 三处教学示例加行尾声明：`AUDIT.md:127`（记的就是这条误报本身）、`AUDIT.md:335`
+   （Obj-C 测试字面量）、`security-checklist.md:65`（讲命中形状的示例）。
+   历史条目一个字没改
+4. CI 新增一步「文档面密钥门禁」：`--include-docs --json` 落 `$RUNNER_TEMP`，
+   只判 `findings.SEC-2` 非空即阻塞，SEC-1/3/4 的文档命中打 INFO 不阻塞。
+   这一步**不能吃扫描器退出码**：文档散文的 SEC-3/SEC-4 计数是 7 与 28，
+   整份文档扫描本身就退 1，拿它当门禁等于永久钉红
+
+反证 27 四臂（跑的是 yml 里那一段 shell 原样正文，`forge-scratch` 内联脚本）：
+T1 现状 SEC-2 合计 0 → 绿；T2 文档种一行 `api_token = "ghp_…"` → 红（合计 2）；
+T3 撤掉 `security-checklist.md:65` 那条声明 → 红（合计 1）；
+T4 把判据读错类别（`SEC-9`）→ KeyError 退 1，不静默绿。
+
+顺手修一处卫生问题：自检夹具的四行里，同一条点位声明被历史脚本重复追加了 4 次
+（`grep -c 自检夹具里的网络字面量` 每行 4 次）。已收成一条；收完自检与裸扫都仍绿。
+
+### W17 两条判定：都已成立，不动文档
+
+- 「门禁夹具自撞 SEC-3」已修：`sh -c 'rm -rf /'` 早按仓规拆写成
+  `("s" + "h -c 'rm -rf /'", …)`（`:802`），裸扫代码面 100/100、SEC-3=0。
+  `git log -S` 指向 `3fe6b0f`。不需要再动 `AUDIT_ALLOW`
+- 「AUDIT 当日数字过期」判不需改：当前状态记录（`:634`、`:854`）与实跑吻合；
+  其余 `95/100` 都在带日期的历史小节里，且 `:641` 自己写明保留作历史值。
+  批量改等于抹掉溯源
+- 报告另提一条低危（我没动，留给下一轮）：`AUDIT.md:175`/`:640` 写「三条豁免、CI 同口径」，
+  而现行 CI 是裸扫无 `--allow`。「CI 同口径」这句现在对不上命令，
+  要么限定成「历史上带 --allow 的口径」，要么删括注
 
 ### 仍未处理（写清楚，不算已解决）
 

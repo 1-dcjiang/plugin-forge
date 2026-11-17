@@ -98,8 +98,11 @@ CHECKS = ("SEC-1", "SEC-2", "SEC-3", "SEC-4")
 # 且 --strict-declared 把畸形标记直接判成问题。日期一过声明自动失效，命中回到账上。
 DECLARE_RE = re.compile(r"forge-declared:\s*(SEC-[1-5])\s+理由=(\S.*?)\s+"
                         r"出处=(\S*AUDIT\.md\S*)\s+复审=(\d{4}-\d{2}-\d{2})")
-# 只认注释位置上的标记：正则定义、报错文案、夹具里的字样都不算声明尝试
-DECLARE_BAD_RE = re.compile(r"#\s*forge-declared:")
+# 只认注释位置上的标记：正则定义、报错文案、夹具里的字样都不算声明尝试。
+# 两种注释语法：`#`（脚本与 yml）与 HTML 注释 `<!-- -->`（md 与 html）。
+# 以前只有 `#` 一种，等于文档没有点位声明这条路——而文档里的教学示例正需要它：
+# 历史条目不许为了过门禁改字（那是造假），改措辞又会丢掉原来的形状（工单 W14）。
+DECLARE_BAD_RE = re.compile(r"(?:#|<!--)\s*forge-declared:")
 
 WRITE_RE = r"(?:open|rmtree|move|remove|unlink|rename|replace|write_text|write_bytes|mkdir|rmdir)\s*[({]"
 ABS = r"['\"](?:[A-Za-z]:[\\\\/]|/(?:etc|usr|var|home|root|proc|Users)/)"
@@ -194,8 +197,14 @@ def secret_assignments(line):
     整个不匹配：值字符类在 `"` 前就撞上 `@`，取到的值只剩一个字符。`.m` 进池之后实测漏的就是这条。
     """
     out = []
+    # 值字符类要认散文的边界：反引号、中日韩标点与全角字符（、。「」（）…）一律当截断点。
+    # 旧版只排 ASCII 空白与 ,;{}()，于是文档里「`max_tokens=MAX_TOKENS`）、类型标注」
+    # 一路吃到下一个 ASCII 空格，取到的值带着反引号与汉字，CODE_VALUE_RE 的全大写规则
+    # 当场失效；同一行相邻的 `OPENAI_API_KEY=`、`DB_PASSWORD=` 也被当成一个长值吞掉
+    # （工单 W14：--include-docs 下 6 处 SEC-2 全是这个形状，没有一处是真凭据）。
     pat = (r'([A-Za-z0-9_.$-]{2,})[\'"]?\s*[:=]\s*@?[\'"]?'
-           r'([^\'"\s,;{}()]{%d,})' % MIN_SECRET_LEN)
+           r'([^\'"\s,;{}()`　-〿一-鿿＀-￯'
+           r'‐-‧“”‘’]{%d,})' % MIN_SECRET_LEN)
     for m in re.finditer(pat, line):
         key, val = m.group(1), m.group(2)
         if line[m.end(2):m.end(2) + 1] == "(":
@@ -678,6 +687,12 @@ def _self_test():
         ("SEC-2", 'p = "redis://:abcdefgh' + 'ijkl1@host"', True),  # 无用户名
         ("SEC-2", 'p = "postgres://u:${DB_' + 'PASSWORD}@db"', False),
         ("SEC-2", 'p = "postgres://u:<' + 'password>@db"', False),  # 模板占位不是密钥
+        # 工单 W14：右值字符类要认散文的边界。这三条钉住修的两侧——
+        # 文档示例不再被误报，但真字面量混在中文句子里仍要抓到。
+        ("SEC-2", '反引号写法 `max_' + 'tokens=MAX_TOKENS`）、类型标注', False),
+        ("SEC-2", 'DB_PA' + 'SS=`、`AWS_SECRET_ACCESS_KEY=`、`MY_SECRET=`', False),
+        ("SEC-2", '说明文字 password = "' + 'abcdefghijkl12" 这样', True),
+        ("SEC-2", '`self.pass' + 'word = password` 属于形参', False),
     ]
     e_bad = [(l, w) for _cid, l, w in extra if hit("SEC-2", l) != w]
     for l, w in e_bad:
@@ -999,6 +1014,12 @@ def _self_test():
          False, "已过复审期"),
         ("x = 1  # forge-" + "declared: SEC-2 理由=示例口令 出处=AUDIT.md#s 复审=2099-01-01",
          True, ""),
+        # 文档没有 # 注释语法，点位声明必须认 HTML 注释这一种写法（工单 W14：
+        # 历史条目与教学示例不许为过门禁改写文字，声明是唯一的正路）
+        ("password = \"abcdefghijkl12\" <!-- forge-" + "declared: SEC-2 理由=教学示例 出处=AUDIT.md#s 复审=2099-01-01 -->",
+         True, ""),
+        ("password = \"abcdefghijkl12\" <!-- forge-" + "declared: SEC-2 理由=缺出处 复审=2099-01-01 -->",
+         False, "格式不合"),
     ]
     for line, want_ok, want_why in dec_lines:
         ok_d, note_d = _declaration(line)
@@ -1019,14 +1040,14 @@ def _self_test():
     dd = tempfile.mkdtemp(prefix="forge-audit-declared-")
     try:
         open(os.path.join(dd, "ok_net.py"), "w", encoding="utf-8", newline="\n").write(
-            "import urllib.request  # forge-" + "declared: SEC-4 理由=只读探测 "  # forge-declared: SEC-4 理由=自检夹具里的网络字面量 出处=AUDIT.md#sec-declared 复审=2026-12-15  # forge-declared: SEC-4 理由=自检夹具里的网络字面量 出处=AUDIT.md#sec-declared 复审=2026-12-15  # forge-declared: SEC-4 理由=自检夹具里的网络字面量 出处=AUDIT.md#sec-declared 复审=2026-12-15  # forge-declared: SEC-4 理由=自检夹具里的网络字面量 出处=AUDIT.md#sec-declared 复审=2026-12-15
+            "import urllib.request  # forge-" + "declared: SEC-4 理由=只读探测 "  # forge-declared: SEC-4 理由=自检夹具里的网络字面量 出处=AUDIT.md#sec-declared 复审=2026-12-15
             "出处=AUDIT.md#s 复审=2099-01-01\n"
-            "urllib.request.urlopen(q)  # forge-" + "declared: SEC-4 理由=只读探测 "  # forge-declared: SEC-4 理由=自检夹具里的网络字面量 出处=AUDIT.md#sec-declared 复审=2026-12-15  # forge-declared: SEC-4 理由=自检夹具里的网络字面量 出处=AUDIT.md#sec-declared 复审=2026-12-15  # forge-declared: SEC-4 理由=自检夹具里的网络字面量 出处=AUDIT.md#sec-declared 复审=2026-12-15  # forge-declared: SEC-4 理由=自检夹具里的网络字面量 出处=AUDIT.md#sec-declared 复审=2026-12-15
+            "urllib.request.urlopen(q)  # forge-" + "declared: SEC-4 理由=只读探测 "  # forge-declared: SEC-4 理由=自检夹具里的网络字面量 出处=AUDIT.md#sec-declared 复审=2026-12-15
             "出处=AUDIT.md#s 复审=2099-01-01\n")
         open(os.path.join(dd, "stale_net.py"), "w", encoding="utf-8", newline="\n").write(
-            "import urllib.request  # forge-" + "declared: SEC-4 理由=只读探测 "  # forge-declared: SEC-4 理由=自检夹具里的网络字面量 出处=AUDIT.md#sec-declared 复审=2026-12-15  # forge-declared: SEC-4 理由=自检夹具里的网络字面量 出处=AUDIT.md#sec-declared 复审=2026-12-15  # forge-declared: SEC-4 理由=自检夹具里的网络字面量 出处=AUDIT.md#sec-declared 复审=2026-12-15  # forge-declared: SEC-4 理由=自检夹具里的网络字面量 出处=AUDIT.md#sec-declared 复审=2026-12-15
+            "import urllib.request  # forge-" + "declared: SEC-4 理由=只读探测 "  # forge-declared: SEC-4 理由=自检夹具里的网络字面量 出处=AUDIT.md#sec-declared 复审=2026-12-15
             "出处=AUDIT.md#s 复审=2001-01-01\n"
-            "urllib.request.urlopen(q)  # forge-" + "declared: SEC-4 理由=只读探测 "  # forge-declared: SEC-4 理由=自检夹具里的网络字面量 出处=AUDIT.md#sec-declared 复审=2026-12-15  # forge-declared: SEC-4 理由=自检夹具里的网络字面量 出处=AUDIT.md#sec-declared 复审=2026-12-15  # forge-declared: SEC-4 理由=自检夹具里的网络字面量 出处=AUDIT.md#sec-declared 复审=2026-12-15  # forge-declared: SEC-4 理由=自检夹具里的网络字面量 出处=AUDIT.md#sec-declared 复审=2026-12-15
+            "urllib.request.urlopen(q)  # forge-" + "declared: SEC-4 理由=只读探测 "  # forge-declared: SEC-4 理由=自检夹具里的网络字面量 出处=AUDIT.md#sec-declared 复审=2026-12-15
             "出处=AUDIT.md#s 复审=2001-01-01\n")
         box = {"ok": [], "bad": []}
         _sd, _fd, _kd, _ud, _ad = scan(dd, False, [], box)

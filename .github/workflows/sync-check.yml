@@ -58,6 +58,36 @@ jobs:
           python skills/plugin-forge/scripts/security_audit.py . --fail-unclear
           python skills/plugin-forge/scripts/security_audit.py . --strict-placeholder
           python skills/plugin-forge/scripts/security_audit.py . --strict-declared
+      - name: '文档面密钥门禁（阻塞：只判 SEC-2；SEC-1/3/4 的文档命中只记日志）'
+        # 工单 W14。上面几步都不带 --include-docs，也就是根本不读 .md：
+        # 真 token 混进文档也能全绿。这一步开文档面，但只对「一票否决」那一类设阻塞。
+        # 为什么不能吃扫描器的退出码：文档散文会撞 SEC-3/SEC-4（实测 7 处与 28 处），
+        # 整份文档扫描本身永远退 1，拿它当门禁等于把 CI 永久钉红。
+        # JSON 落到 $RUNNER_TEMP，不落在仓里——否则下一步 glob('**/*.json') 会把它读进去。
+        run: |
+          rc=0
+          python skills/plugin-forge/scripts/security_audit.py . --include-docs --json > "$RUNNER_TEMP/audit-docs.json" || rc=$?
+          echo "扫描器自身退出码 $rc（文档面本来就非 0，本步不看它）"
+          python - "$RUNNER_TEMP/audit-docs.json" <<'PY'
+          import json, sys
+          DOCS = (".md", ".markdown", ".txt", ".rst", ".llm")
+          d = json.load(open(sys.argv[1], encoding="utf-8"))
+          sec2 = d["findings"]["SEC-2"]
+          docs2 = [h for h in sec2 if h["file"].lower().endswith(DOCS)]
+          print("counts:", d["counts"], "| SEC-2 合计 %d，其中文档 %d" % (len(sec2), len(docs2)))
+          for c in ("SEC-1", "SEC-3", "SEC-4"):
+              inc = [h for h in d["findings"][c] if h["file"].lower().endswith(DOCS)]
+              if inc:
+                  print("INFO %s 文档命中 %d 处（不计分、不阻塞）" % (c, len(inc)))
+                  for h in inc[:5]:
+                      print("   %s:%d [%s]" % (h["file"], h["line"], h.get("note", "")))
+          if sec2:
+              print("BLOCK SEC-2：文档或代码里有明文密钥形状，一票否决")
+              for h in sec2:
+                  print("   %s:%d [%s]" % (h["file"], h["line"], h.get("note", "")))
+              sys.exit(1)
+          print("OK SEC-2 = 0（教学示例走点位声明，不走 --allow 整份豁免）")
+          PY
       - name: 'profile 锚点漂移探针（阻塞：行号漂即红；取不到上游重试三次）'
         env:
           GITHUB_TOKEN: ${{ github.token }}
