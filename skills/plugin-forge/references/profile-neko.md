@@ -145,12 +145,11 @@ gh api repos/Project-N-E-K-O/N.E.K.O/contents/scripts/custom_channels/neko_chann
 - 沙箱脚本：`skills/neko-plugin-sandbox/scripts/sandbox.py`（`doctor` / `prepare` / `sync` / `install` / `plugin-add` / `plugin-rm` / `serve` / `start` / `status` / `stop`）。原 `neko-plugin-ops/` 那份已在 v2.0.0 退役（AUDIT.md 整合记录），缺 plugin-id 校验与停止前的进程身份检查，不要用。`inspect` 是宿主 `neko-plugin` CLI 的输出对象，不是沙箱子命令。
   加载插件前 `uv run neko-plugin check <id>` 需 0 error；`inspect` 出现 "declared but NOT registered" = entry-404 根因。
 
-### 7.1 打包与自安装（本机实测 2026-11-12；下列符号已在 main acfbdbc50 复核存在（2026-11-15），本节只用符号锚点，不写行号）
+### 7.1 打包与自安装（本机实测 2026-11-12；下列符号已在 main `e14f61963` 复核存在（2026-11-17），并把每个符号的行号一并写出来。以前只写符号名，探针看不见这一节，行号漂了也没人知道）
 
 - build 的 `-o/--out` **必须是完整产物文件名**（`...\<id>-<版本>.neko-plugin`）。传目录的后果：
-  `export_package` 先把该路径当产物文件写出来（`[FACT] plugin/neko_plugin_cli/core/build.py:
-  export_package，体内 package_path.parent.mkdir(parents=True, exist_ok=True) 再 zipfile.ZipFile(package_path, "w")`），随后 `BuildResult` 才校验扩展名并
-  报错（`[FACT] plugin/neko_plugin_cli/core/models.py: BuildResult._validate_layout（先 is_file 再判后缀；正因 export_package 已写出垃圾文件，is_file 通过，看到的才是扩展名错）`）⇒ 现场留下一个「拿目录名
+  `export_package` 先把该路径当产物文件写出来（`[FACT] plugin/neko_plugin_cli/core/build.py: export_package（def 435），体内 `package_path.parent.mkdir(parents=True, exist_ok=True)`（441）再 `with zipfile.ZipFile(package_path, "w", compression=zipfile.ZIP_DEFLATED) as archive`（447），读于 e14f61963，2026-11-17`），随后 `BuildResult` 才校验扩展名并
+  报错（`[FACT] plugin/neko_plugin_cli/core/models.py: `class BuildResult`（277）与 `_validate_layout`（292，体内 293 行先 is_file 再判后缀；读于 e14f61963，2026-11-17；正因 export_package 已写出垃圾文件，is_file 通过，看到的才是扩展名错）`）⇒ 现场留下一个「拿目录名
   当文件名」的垃圾文件。下一次改成正确写法时那句 mkdir 撞上这个同名文件，报 `[WinError 183]`
   （已存在的**目录**反而被 exist_ok 吞掉）。补救：先删掉那个垃圾**文件**。
   同一个根因的三种表现（连败 4 次约 12 分钟）：`-o` 给已存在目录 → `[Errno 13] Permission denied`
@@ -158,10 +157,9 @@ gh api repos/Project-N-E-K-O/N.E.K.O/contents/scripts/custom_channels/neko_chann
   正确写法落进那个垃圾文件名下 → `[WinError 183]`。别把 `Errno 13` 误判成沙箱不许写 Downloads。
 - 自安装两步（loopback API，不带 Origin；`cli install` 被宿主禁用时的唯一路径）：
   `POST /plugin-cli/install-plan {"package": "<绝对路径>"}` → 取 `action` 与 `confirmation_token`
-  `[FACT] plugin/server/routes/plugin_cli.py: install-plan 路由`；
+  `[FACT] plugin/server/routes/plugin_cli.py: `install-plan` 路由（350，读于 e14f61963，2026-11-17）`；
   `POST /plugin-cli/install {"package":…, "confirm_upgrade": true, "confirmation_token": …}`
-  `[FACT] 同文件 install 路由（挂 mutation_router，鉴权与只读路由不同）、请求体模型的 on_conflict
-  与 confirmation_token 字段，on_conflict 只接受 fail`。
+  `[FACT] 同文件 install 路由（327，挂 mutation_router，鉴权与只读路由不同）、`plugin/server/application/plugin_cli/service.py` 的 on_conflict（300、438）与 confirmation_token（59、305）字段，on_conflict 只接受 fail；`must be inside` 那句在 210。读于 e14f61963，2026-11-17`。
   成功判据四字段：`payload_hash_verified=true`、`operation`（upgrade/reinstall）、`restarted`、
   `rollback_status`。实测 43.5 MB 包 install 用时 13.1 秒。
 - `install-plan` 的 `package` **必须位于 `.neko-plugin-packages` 根内**，否则 400

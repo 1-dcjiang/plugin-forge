@@ -95,7 +95,7 @@
 
 ## 2. 逐步 Checklist（会话启动时执行）
 
-1. **读 stdin**：解析 `session_id / source / hook_event_name`；解析失败不得报错，按空输入继续（已实测降级路径可用）。
+1. **读 stdin 并排空**：脚本不使用 payload 里的任何字段。读的理由只有一个——宿主不关 stdin 时，不读就会等 EOF 而挂住。读失败不得报错，按空输入继续（已实测降级路径可用）。旧版本还顺手 `json.loads` 一份却没人读，2026-11-17 删掉，本节同期改正这句话。
 2. **扫描 12 个检测点**：严格按 `capability-baseline.md` §2 的「变更检测清单」逐项读取（路径与字段见该表，此处不重复）。
 3. **计算指纹**：受控字段子集 → `json.dumps(sort_keys=True, ensure_ascii=False, separators=(',',':'))` → sha256 前 12 位；与 `BASELINE` 常量比对。
 4. **就绪检查**：核对 8 个 hook 脚本存在性；任一缺失即记入差异（启动失败风险）。
