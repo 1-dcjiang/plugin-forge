@@ -361,6 +361,75 @@ DETACHED 那半个仍没覆盖：它只在 Windows 真起进程时才走得到�
 
 沙箱根 `forge-sandbox-start` 与 `forge-sandbox-refuse` 留着，随时可整个删。
 
+## N.E.K.O 对齐轮（2026-11-17，上游 main `db81c1be0`，当天又前进到 `e14f61963`）
+
+作者给的口径两句：warnings 当 errors，每一次都要跟 `Project-N-E-K-O/N.E.K.O` 对齐。
+本轮把 CI 里三条「只报不拦」的步骤改成阻塞，并先把探针本身修到值得阻塞。
+
+### CI 的三条 report-only 步骤改成阻塞
+
+`--fail-unclear`、`--strict-placeholder`、`profile_drift.py --strict` 现在都会红。
+三条在本机实跑退 0 / 0 / 0，所以改成阻塞不会天天假红。
+探针取不到上游时退 2；CI 改成重试三次（15、30、45 秒），三次仍取不到才红。
+限流与断网既不该冒充结论，也不该被当成核过。
+
+### 探针补的判据（每条都有反向对照）
+
+- 空行：锚点行落在空行上时，旧版因为「空行也算在定义体内」判成对得上。收紧后当场抓到 3 处假绿
+  （`validate_cmd.py` 185→189、`plugin_toml_semantics.py` 130-140→136-150、`base.py` 116-123→118-121）。控制 H1、H2 变红。
+- 1MB 以上的文件改走 raw 端点：Contents API 对 `plugin/settings.py` 返回 200 但不带正文，旧版算 unreachable。
+  CI 一改成阻塞，这种文件会让探针天天红却什么都没说。控制 H3、H4、H5、H6 变红。
+- 路由字面量不再当符号：`GET /plugin/metrics*` 里 IDENT_RE 会抓到 metrics，并把它安到前一个路径头上，
+  于是报假漂移。控制 H7 变红。
+- `check()` 也要能注入：以前自检只测 `_all_blank` 这类纯函数，接线断了照样绿。控制 H8 变红。
+- `--strict` 现在把 weak 也算失败。「没有可比对的符号」是我们自己的写法问题，静默通过就是在门禁里留假绿。
+- PATH_RE 补 `utils/` 与 `brain/`。**不要加 `scripts/`**：那是我们自己的仓路径，加进去之后探针把本文提到的
+  `scripts/profile_drift.py` 当成上游锚点，报出一条假 404。本轮真踩过一次，已写进注释。
+- 自检从 20 例升到 33 例。
+
+### 对齐结果
+
+- 锚点从 53 条涨到 71 条。全部在 `db81c1be0` 上逐条读对上，当天新 head `e14f61963` 复跑仍是 71 条、漂移 0。
+- 改正文档 19 处。跑了一条 27 个 agent 的工作流（清点 → 逐条核对 → 对抗复核），0 处被反证推翻。
+  行号要点：`http_app.py` 268→280，超时 raise `settings.py` 788-791→766-769，`market_bridge.py` 90→91 且四段各 +1，
+  `generator.py` 824-836→859-871，`sdk-reference.md` 225→246 与 132/141→134/143，`settings.py` 555-557→533-536，
+  `plugin_projects.py` 50→53，`host.py` 131-135→138-143，`query_service.py` 885→887-890 与 831→833-836，
+  `plugins.py` 两个函数行 118→119 与 208→209。
+- 事实改正两条。内置插件从 12 个变 11 个（`wechat_integration` 已移除），且 11 个全部显式写 `auto_start`，
+  只有 `web_search` 是 `true`（`plugin/plugins/web_search/plugin.toml:23`）。
+  `config_dir` 上游已改成 `plugin_dir` 的兼容别名，profile 里补了一句「别往里写」。
+- 路由表整段重写：每个号都带全路径与函数名。裸文件名与光杆行号探针看不见，这一改让探针多核 18 条。
+- sha 标记按硬判据改口 30 行：一行里探针能看到的每个锚点都在当前 main 上命中，才改那行的 `读于`。
+  仍留 `acfbdbc50` 的锚点标记只剩第 68、75、148 三行，因为探针在那几行看不到锚点。
+
+### 沙箱脚本的覆盖补齐
+
+- `_pid_really_alive` 加注入接缝，补 12 条分支用例，含 Windows 那一支（`on_nt` 让 ubuntu 也能验它）。
+- `cmd_stop` 加 pid 类型与取值校验。`int(1.5)` 会静默截成 1，然后拿 pid=1 去问操作系统；
+  非数字 pid 以前一路撞到 `"%d"` 才抛 ValueError，整轮 stop 一句人话都没有。控制 E1-E8 全部变红。
+- `_wait_health` 补三条：就绪立刻返回 200、`timeout=0` 一次都不探、服务提前退出要把日志尾巴与退出码带出来并走 die。
+  第一条断言起初读 `str(SystemExit)`，读错了地方——die 把消息打到 stderr，异常只带退出码，改成捕 stderr。
+- 沙箱自检 141 → 161 项，整套 0.8 秒，没有睡进 1 秒粒度。
+
+### 能力刷新 hook
+
+- 新增 49 项离线自检，CI 加一条阻塞步骤。这个脚本每个会话都跑，以前 CI 只做 `py_compile`，等于零覆盖。
+- 删掉两处死代码：`build_context` 的 `truncated` 形参，以及 `main` 里没人读的 `json.loads`。
+  stdin 仍然排空——宿主不关管道时不读就会挂。
+- `build_context` 加 `read` / `exists` 注入接缝，自检因此不碰用户目录。自检只在系统临时目录建两个夹具
+  测 `_read` 的 256KB 上限与 BOM，hook 的运行路径照旧一个文件都不写。这条例外写进 docstring 的「已知例外 2」。
+- 真机跑一次（2026-11-17 08:05 前后）：输出合法单行 JSON，顶层只有 `hookSpecificOutput`，
+  ctx 1281 字符，stderr 空，报「有变更（10 项）」。
+
+### 仍没清掉的
+
+- `session-refresh-sop.md` 第 98 行「解析 `session_id / source / hook_event_name`」与第 162 行
+  「输出「部分扫描」结果」都跟代码不符。那一份是作者单机文档，改它要走他自己的窗口，本轮没动。
+- §7.1 的 147、149、157、164，第 85 行的四个活动字段，第 101 行的常量块名，第 178 行的 docs 清单：
+  探针看不见，本轮没逐条重读语义，引用前先重核。
+- DETACHED 分支的实测只到注入那一层。真起进程时父任务被 job object 回收的那一半仍未量过。
+- 沙箱根 `forge-sandbox-start` 与 `forge-sandbox-refuse` 留在本机，随时可整删。
+
 ### 仍交回作者的一项
 
 `session_capability_refresh.py` 的两处死代码没动。改动本身各一行，但它牵连三件事：那个文件是每会话都跑的

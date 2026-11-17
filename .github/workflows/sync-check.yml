@@ -36,21 +36,31 @@ jobs:
         run: python skills/neko-plugin-sandbox/scripts/sandbox.py --self-test
       - name: Drift probe self-test
         run: python scripts/profile_drift.py --self-test
+      - name: SessionStart 能力刷新自检
+        run: python scripts/session_capability_refresh.py --self-test
       - name: 对本仓库跑一次真实安全扫描
         env:
           AUDIT_ALLOW: skills/plugin-forge/scripts/security_audit.py,skills/neko-plugin-sandbox/scripts/sandbox.py,scripts/profile_drift.py
         run: python skills/plugin-forge/scripts/security_audit.py . --allow "$AUDIT_ALLOW"
-      - name: 'Report only: 审计两个非阻塞旗标（盲区 / 占位符严格档，不阻塞）'
-        continue-on-error: true
+      - name: '审计两个旗标转为阻塞（盲区 / 占位符严格档，作者 2026-11-17 定：warnings 当 errors）'
         env:
           AUDIT_ALLOW: skills/plugin-forge/scripts/security_audit.py,skills/neko-plugin-sandbox/scripts/sandbox.py,scripts/profile_drift.py
         run: |
-          python skills/plugin-forge/scripts/security_audit.py . --allow "$AUDIT_ALLOW" --fail-unclear || true
-          python skills/plugin-forge/scripts/security_audit.py . --allow "$AUDIT_ALLOW" --strict-placeholder || true
-      - name: 'Report only: profile 锚点漂移探针（不阻塞）'
-        continue-on-error: true
+          python skills/plugin-forge/scripts/security_audit.py . --allow "$AUDIT_ALLOW" --fail-unclear
+          python skills/plugin-forge/scripts/security_audit.py . --allow "$AUDIT_ALLOW" --strict-placeholder
+      - name: 'profile 锚点漂移探针（阻塞：行号漂即红；取不到上游重试三次）'
         env:
           GITHUB_TOKEN: ${{ github.token }}
-        run: python scripts/profile_drift.py --strict
+        run: |
+          rc=2
+          for i in 1 2 3; do
+            python scripts/profile_drift.py --strict; rc=$?
+            if [ "$rc" -ne 2 ]; then break; fi
+            echo "取不到上游（限流或网络），第 $i 次重试"; sleep $((i * 15))
+          done
+          if [ "$rc" -eq 2 ]; then echo "重试三次仍取不到上游：这不算核过，也不算漂移"; fi
+          exit "$rc"
+      - name: SessionStart 能力刷新自检
+        run: python scripts/session_capability_refresh.py --self-test
       - name: JSON artifacts parse
         run: python -c "import json,glob;fs=glob.glob('**/*.json',recursive=True)+glob.glob('.claude-plugin/*.json');[json.load(open(p,encoding='utf-8-sig')) for p in fs]"
