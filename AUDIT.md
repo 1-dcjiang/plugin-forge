@@ -795,6 +795,19 @@ session_id / source / hook_event_name」。删掉解析就同时改了一条对�
   对照组绿 —— 全部符合预期
 - SKILL.md 的坑表补第 8、9 条；标题里的「七个」去掉，改成不数条数的说法
 
+### 工单 W03：`_server_env` 就地污染宿主环境的回归，现在有断言拦了
+
+- 复现（撤修复）：把 `env = os.environ.copy()` 改成 `env = os.environ`，旧自检 187 项照过；
+  新自检报 `FAIL: _server_env 就地改了宿主的 os.environ（少了 4 项、变了 8 项）`，退出码 1 [实测]
+- 进程内直验（臂3）：`SNAPSHOT_UNCHANGED True`、`OUT_OF_CHILD True`、`STILL_IN_HOST True` [实测]
+  ——子进程环境里没带 planted token，宿主自己的环境一字未动，这才是「副本被清」的正确形状
+- 死断言纠正：`ZZ_TEST_PWD_LIKE` 名字里有 PWD 词根，`env_is_secret` 实测回 True，
+  旧用例却把它放进 keep 名单（那条断言永远不可能成立）。现在它进 drop 名单，
+  名单退回旧写法时自检立刻变红（臂2）[实测]
+- 沙箱自检 196 项 → 201 项，退出码 0；反向对照 `~/forge-scratch/run_controls18.py` 四臂全部符合预期
+- 一处工具教训：反证脚本原本把「日志里出现 PermissionError」当失败信号——那是 kill 用例的预期输出。
+  改成只认自检自己的 `FAIL:` 行与 SELF-TEST 汇总行
+
 ### 仍未处理（写清楚，不算已解决）
 
 - `--include-docs` 没接进 CI：本仓文档里有大量示例文本会撞 SEC-1/3/4，逐条人工判过才能豁免。

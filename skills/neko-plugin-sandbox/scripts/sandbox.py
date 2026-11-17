@@ -1599,8 +1599,11 @@ def _self_test():
     # _server_env 的删凭据循环：以前用例只问 env_is_secret 这个名字形状判得对不对，
     # 「真从子进程环境里删掉了没有」这一环没人核过（终检 sweep 第 6 条）。
     x_root2 = Path(tempfile.mkdtemp(prefix="sb-scrub-"))
-    scrub_drop = ["ZZ_TEST_GITHUB_TOKEN", "ZZ_TEST_API_KEY", "ZZ_TEST_SECRET"]
-    scrub_keep = ["SSH_AUTH_SOCK", "ZZ_TEST_PWD_LIKE", "PATH"]
+    scrub_drop = ["ZZ_TEST_GITHUB_TOKEN", "ZZ_TEST_API_KEY", "ZZ_TEST_SECRET",
+                  # PWD 词根命中，_LIKE 后缀挡不住：名字里有 PWD 就该删（旧用例把它放 keep，
+                  # 是一条永远不成立的死断言——工单 W03）
+                  "ZZ_TEST_PWD_LIKE", "ZZ_TEST_PWD"]
+    scrub_keep = ["SSH_AUTH_SOCK", "PATH", "SYSTEMROOT", "PWD"]
     saved = {}
     try:
         for k in scrub_keep + scrub_drop:
@@ -1608,12 +1611,21 @@ def _self_test():
             os.environ[k] = "Sup3rS3cretValue" if k in scrub_drop else "keep-me"
         ns_env = argparse.Namespace(plugin_startup_timeout=60.0, port_resolved=43117,
                                     isolate_home=True)
+        host_before = dict(os.environ)
         se_env = _server_env(x_root2, ns_env)
+        # _server_env 改的是副本，不是宿主。这一条断言钉住 .copy()：
+        # 去掉它，上面的删凭据断言照样绿，而调用方自己的环境已经被掏空。
+        n_before = len(host_before)
+        if dict(os.environ) != host_before:
+            bad.append("_server_env 就地改了宿主的 os.environ（少了 %d 项、变了 %d 项）"
+                       % (n_before - len(os.environ),
+                          sum(1 for k, v in os.environ.items() if host_before.get(k) != v)))
+        x_n += 1
         for k in scrub_drop:
             x_n += 1
             if k in se_env:
                 bad.append("_server_env 没删掉凭据形状变量 " + k)
-        for k in ("SSH_AUTH_SOCK", "PATH"):
+        for k in scrub_keep:
             x_n += 1
             if k not in se_env:
                 bad.append("_server_env 把该留的运行变量删了：" + k)
