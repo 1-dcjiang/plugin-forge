@@ -293,7 +293,10 @@ def collect(text):
                             "text": line.strip()[:120]})
     seen, uniq = set(), []
     for an in anchors:
-        k = (an["path"], tuple(an["nums"]), an["weak"], an.get("symbol_only"),
+        # 行号也进 key：同一个 (路径, 行号) 被两行重复引用时，两行都要算被核过。
+        # 以前只留第一条，第二条静默消失，「这行有没有被门禁看见」这个问题的答案就是错的。
+        # 抓取成本不变：check() 对同一个文件本来就有缓存。
+        k = (an["line"], an["path"], tuple(an["nums"]), an["weak"], an.get("symbol_only"),
              tuple(an.get("syms", [])))
         if k not in seen:
             seen.add(k)
@@ -461,6 +464,8 @@ def self_test():
         (window_nums("行号 64、95、182，读于 e14f61963"), [64, 95, 182]),
         (window_nums("`kind: EntryKind` 那一行，行号 263、302、391"), [263, 302, 391]),
         (window_nums("这三处是 12、34"), []),
+        # 同一句声明被两行重复引用时，两行都要算被门禁看见（key 里带行号）
+        (len(collect("见 plugin/x.py 的 `handler_a`:12" + NL + "见 plugin/x.py 的 `handler_a`:12")), 2),
         (window_nums("def :150、调用 :180、回写 :184"), [150, 180, 184]),
         # 符号锚只认文档规定的「文件:符号名」两种写法，散文里的词不算锚点
         (_anchor_symbol_span(" : MESSAGE_PLANE_PAYLOAD_MAX_BYTES 常量块"),

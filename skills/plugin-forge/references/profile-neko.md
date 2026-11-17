@@ -95,8 +95,8 @@ gh api repos/Project-N-E-K-O/N.E.K.O/contents/scripts/custom_channels/neko_chann
   （别承诺能拿到点击/触摸事件）。
 
 ## 5. 错误约定
-- 成功 `Ok({...})`，失败 `Err(SdkError("原因"))`；`Ok/Err/Result/SdkError/TransportError/unwrap/unwrap_or`
-  均从 `plugin.sdk.plugin` 导出 `[FACT] plugin/sdk/plugin/__init__.py`。**不要 `raise`**（定时回调里 raise 会拖垮调度）。
+- 成功 `Ok({...})`，失败 `Err(SdkError("原因"))`；七个名字都从 `plugin.sdk.plugin` 导出
+  `[FACT] plugin/sdk/plugin/__init__.py: Ok 55、Err 56、Result 57、unwrap 58、unwrap_or 59、SdkError 69、TransportError 70（读于 e14f61963，2026-11-17）`。**不要 `raise`**（定时回调里 raise 会拖垮调度）。
 - 工具错误返回脱敏错误码；别把原始对话 / 用户密钥 / 隐私 payload 写进日志或结果。
 
 ## 6. 硬性限制速查
@@ -118,7 +118,7 @@ gh api repos/Project-N-E-K-O/N.E.K.O/contents/scripts/custom_channels/neko_chann
   该参数**默认 False** `[FACT] plugin/server/http_app.py: build_plugin_server_app 的 manage_lifecycle 形参`, autostart 由 `if manage_lifecycle: await lifecycle_startup()` 决定
   `[FACT] plugin/server/http_app.py: plugin_server_lifespan 内 startup(:198) 与 shutdown(:255) 两处 if manage_lifecycle（行号读于 db81c1be0，2026-11-17）`。
 - **`NEKO_PLUGIN_HOSTED_BY_AGENT` 已不是开关**：只剩 agent_server 在写 `[FACT] app/agent_server/api_runtime.py: startup() 内 os.environ 赋值（:559 读于 db81c1be0，2026-11-17）；main 全库检索其余命中仅 http_app 注释与 3 个测试文件`；
-  `plugin/server/http_app.py` 在 `manage_lifecycle` 上方注释明说早先读它（`_EMBEDDED_BY_AGENT`）会在 import 时冻结。
+  `[FACT] plugin/server/http_app.py: _EMBEDDED_BY_AGENT 那句注释在 193 行，位置就在 manage_lifecycle: bool = False 那行（280）上方，明说早先读它会在 import 时冻结（读于 e14f61963，2026-11-17）`。
 - Windows 强制 `WindowsSelectorEventLoopPolicy` `[FACT] plugin/user_plugin_server.py: _configure_windows_event_loop_policy（def :59、set_event_loop_policy :66、import 时调用 :74；三处行号读于 db81c1be0，2026-11-17；仅在 win32 且该类存在时生效）`。
 - 端口 env `NEKO_USER_PLUGIN_SERVER_PORT`（兼容名 `USER_PLUGIN_SERVER_PORT`，再退回 Electron 写的 `port_config.json`），上游默认 `48916`
   `[FACT] config/network.py: USER_PLUGIN_SERVER_PORT = _read_port_env("USER_PLUGIN_SERVER_PORT", 48916)`（:193 读于主 sha db81c1be0，2026-11-17；符号才是锚点；`resolve_user_plugin_base` 在调用时重读 env，非仅 import）
@@ -133,7 +133,7 @@ gh api repos/Project-N-E-K-O/N.E.K.O/contents/scripts/custom_channels/neko_chann
   变更路由逐个记号（同读于 db81c1be0，2026-11-17）：plugin/server/routes/plugins.py 的 `start_plugin_endpoint`:88、`stop_plugin_endpoint`:130、`reload_plugin_endpoint`:196、`set_plugin_auto_start_endpoint`:159、`refresh_plugin_endpoint`:118、`refresh_plugins_endpoint`:184、`delete_plugin_endpoint`:172、`reload_all_plugins_endpoint`:208；
   plugin/server/routes/runs.py 的 `runs_create`:35、`runs_create_upload`:52、`runs_cancel`:91、`uploads_put`:74。
 - **易错路由**：集合 `GET /runs` 不存在（无该路由，按 Starlette 路由匹配回 405，未实测），但单个 run 有 `GET /runs/{run_id}`、`/blobs/{blob_id}`、`/export`
-  `[FACT] plugin/server/routes/runs.py: runs_get`:45、`runs_get_blob`:83、`runs_export`:109 三个读取入口（装饰器在 44、82、108）；行号读于 db81c1be0，2026-11-17`；裸 `/messages` 不存在（真实路径 `/plugin/messages`）。打错会误判成插件故障。
+  `[FACT] plugin/server/routes/runs.py: runs_get 45、runs_get_blob 83、runs_export 109 三个读取入口（装饰器在 44、82、108）；行号读于 db81c1be0，2026-11-17`；裸 `/messages` 不存在（真实路径 `/plugin/messages`）。打错会误判成插件故障。
 - **autostart 判定链（缺一即不启动）**：`manage_lifecycle=True` ＋ `[plugin_runtime] auto_start=true`（省略即 false）
   ＋ `enabled`/`runtime_enabled` 非 `False` ＋ `runtime_load_state != "failed"` ＋ 源未缺失 ＋ id 不在待审批集合 ＋ 非工作台项目（注册表 meta.source ≠ PROJECT_SOURCE，六个过滤集中在 `plugin/server/application/plugins/registry_service.py: _get_autostart_plugin_ids_sync`（1254-1275，读于 db81c1be0，2026-11-17））
   `[FACT] plugin/config/schema.py: PluginRuntimeSchema.auto_start（:267）、plugin/core/communication.py: _handle_entry_update 以默认 False 复制 auto_start（:939，入口级默认，非 [plugin_runtime] 节默认）；均读于 db81c1be0，2026-11-17`、`plugin/server/infrastructure/autostart_approvals.py`、
@@ -163,8 +163,7 @@ gh api repos/Project-N-E-K-O/N.E.K.O/contents/scripts/custom_channels/neko_chann
   成功判据四字段：`payload_hash_verified=true`、`operation`（upgrade/reinstall）、`restarted`、
   `rollback_status`。实测 43.5 MB 包 install 用时 13.1 秒。
 - `install-plan` 的 `package` **必须位于 `.neko-plugin-packages` 根内**，否则 400
-  「package '…' must be inside …」`[FACT] plugin/server/application/plugin_cli/service.py:
-  _require_within` ⇒ 产物先复制进该目录再调 API；`Downloads` 里的包不能直接装。
+  「package '…' must be inside …」`[FACT] plugin/server/application/plugin_cli/service.py: _require_within（def 205、第一处调用 546，读于 e14f61963，2026-11-17）` ⇒ 产物先复制进该目录再调 API；`Downloads` 里的包不能直接装。
 - 装完四件套核对（缺一不算交付）：执行目录逐文件哈希 == 包内载荷；`plugins.lock.json` 的
   `package_sha256` == 包哈希；`GET /plugins` 的版本号 == 新版本；`GET /plugin/{id}/logs` 0 ERROR/Traceback。
 - Windows 执行坑（同日两次实测代价）：**PowerShell 管道喂 Python 会把非 ASCII 变成 `?`**。
@@ -181,8 +180,8 @@ gh api repos/Project-N-E-K-O/N.E.K.O/contents/scripts/custom_channels/neko_chann
 - 宿主侧市场桥接前缀 `/market`（catalog / submissions / install / oauth / status 等）
   `[FACT] plugin/server/routes/market_bridge.py: router = APIRouter(prefix="/market")（:91 读于 db81c1be0，2026-11-17）`；路由分段 catalog（761-816）/ submissions（1060-1166）/ install·tasks·installed（1709-1898）/ oauth（2109-2618）。旧行号 87、757-812、1055-1150、1693-2049 已失效，2026-11-17 又失效一批：90、760-815、1059-1154、1708-1897、2108-2617。知识库桥 `/market/knowledge` `[FACT] plugin/server/routes/knowledge_bridge.py: router = APIRouter(prefix="/market/knowledge")（:48 读于 db81c1be0）`。
 - **插件制作工作台不是纯前端**：`/plugin-projects/*`（`APIRouter(prefix="/plugin-projects", dependencies=[require_admin])`
-  `[FACT] plugin/server/routes/plugin_projects.py 的 `router = APIRouter`:30，含 `plugin_project_toolchain`:163、`plugin_project_publish_status`:171、`latest_plugin_project_publish_task`:196；行号读于 db81c1be0，2026-11-17）
-  与 `/plugin-cli/*`（plugin/server/routes/plugin_cli.py：`list_plugin_cli_plugins`:265、`list_plugin_cli_packages`:273、`plugin_cli_build`:281、`plugin_cli_inspect`:305、`plugin_cli_verify`:316、`plugin_cli_install`:327、`plugin_cli_install_plan`:350，行号读于 db81c1be0，2026-11-17）在宿主进程里调 CLI。
+  `[FACT] plugin/server/routes/plugin_projects.py: router = APIRouter 30、plugin_project_toolchain 163、plugin_project_publish_status 171、latest_plugin_project_publish_task 196（行号读于 db81c1be0，2026-11-17）`
+  与 `/plugin-cli/*` 在宿主进程里调 CLI `[FACT] plugin/server/routes/plugin_cli.py: list_plugin_cli_plugins 265、list_plugin_cli_packages 273、plugin_cli_build 281、plugin_cli_inspect 305、plugin_cli_verify 316、plugin_cli_install 327、plugin_cli_install_plan 350（行号读于 db81c1be0，2026-11-17）`。
 - **沙箱不验 Market 提审/发布**（要真实 GitHub 凭据，触红线）；最多验到桥接可达 + 未授权时干净拒绝。
 - 市场惯用法历史样本数据在本仓库 `references/neko/neko-market-patterns.md`（原 `neko-plugin-ops/` 那份随 v2.0.0 退役；127 样本 @2026-10-26，分母固定）。
 
