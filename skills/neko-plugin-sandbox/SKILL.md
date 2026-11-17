@@ -107,6 +107,8 @@ python $S serve     --root <ROOT>                        # 前台常驻（推荐
 python $S status    --root <ROOT>                        # health + /plugins + /plugin/status + /plugin/messages
 python $S stop      --root <ROOT>                        # 先验 pid 身份再动手，走向表见下
 python $S plugin-rm --root <ROOT> --id <插件id>          # 撤掉插件，恢复 checkout 干净
+#   两条防误删：id 只差大小写不算另一个插件（NTFS 上是同一个目录，直接拒绝）；
+#   junction / 悬空联接点按链接摘除，不会被当成「不存在」留在插件树里
 ```
 
 **为什么每次都要 sync**：官方仓库迭代很快（实测一次同步就落后 1 个提交）。拿旧源码验出来的结论，
@@ -161,7 +163,7 @@ Linux 读 `/proc/<pid>/cmdline` 与 `/proc/<pid>/stat`。macOS 没有 `/proc`，
 `plugin/plugins/` 下（表现为 `git status` 里的 `?? plugin/plugins/<id>/`）。这是上游允许的本地插件放置方式，
 但请用 `plugin-rm` 收尾，别留在别人的工作区里。
 
-## 七个真实踩过的坑（都已固化进脚本）
+## 真实踩过的坑（都已固化进脚本；标题不数条数，加一条不用改三处）
 
 | # | 现象 | 根因 | 处置 |
 |---|---|---|---|
@@ -171,6 +173,8 @@ Linux 读 `/proc/<pid>/cmdline` 与 `/proc/<pid>/stat`。macOS 没有 `/proc`，
 | 4 | 服务刚 `/health` 200 就消失，日志无任何退出记录 | 父进程带着 job object 时（受管后台任务那种），子进程随 job 一起被清。父进程只是普通命令时不会 | 要常驻就用 `serve` 交给受管后台任务。`start` 的 `DETACHED_PROCESS` 只挡得住普通父进程退出，挡不住 job object。两侧都实测过（2026-11-17）：`start` 起的服务在父命令退出后仍活着，`stop` 4.9 秒确认真的停；`serve` 的受管任务被终止时整棵树一起消失，状态文件留下，下一次 `stop` 走 `gone` 分支只清状态 |
 | 5 | 插件被判 `failed`（如 `web_search`），日志写明 `startup timed out after 10.0s` | 上游默认 `NEKO_PLUGIN_STARTUP_TIMEOUT=10`，冷 venv 首次 import 重依赖远超 | 脚本默认传 **60s**（`--plugin-startup-timeout` 可调）；**别超过 300s**，上游 `plugin/settings.py:769` 会直接 raise |
 | 6 | 服务起来了、`/plugins` 里**有**这个插件、`/plugin/status` 显示它不是 running | 上游 `plugin/core/registry.py:1293`「没写 `plugin_runtime.auto_start` 时默认关闭」。仓库里 11 个内置插件全部显式写了 `auto_start`，只有 `web_search` 是 `true`（`plugin/plugins/web_search/plugin.toml:23`），其余 10 个是 `false` | 在插件 `plugin.toml` 写 `[plugin_runtime] auto_start = true`；`plugin-add` 现在会直接报告这一项 |
+| 8 | 装了 `DEMO_PLUGIN` 之后，`demo_plugin` 的工作内容没了，两条命令都退 0 | NTFS 不区分大小写：`dest.exists()` 判成「同一个目录要重装」，`rmtree` 删掉的是另一个插件；`plugin-rm` 打错大小写也照样删，报「已删除」 | `plugin-add`/`plugin-rm` 先按目录里的真名解析（`resolve_plugin_entry`），只差大小写就拒绝并说明；平台行为用探测得到，不靠 `os.name` 猜（工单 W01） |
+| 9 | `plugin-add` 撞上 junction 直接 traceback；`plugin-rm` 对一个删不掉的条目报「不存在」 | junction 不是软链：`Path.is_symlink()` 回 False，可 `shutil.rmtree` 按 `os.path.islink` 拒绝执行；悬空 junction 的 `exists()` 也是 False，就被当成不存在 | 形态判断加 `is_reparse_point`（读 `lstat` 的 `FILE_ATTRIBUTE_REPARSE_POINT`），摘链接统一走 `remove_link`（先 `unlink`，目录型链接退到 `rmdir`）（工单 W02） |
 | 7 | 列表里有、`auto_start` 也写了，还是不启动 | 该 id 落在 `plugin_autostart_pending.json` 的待审批集合里（新装/导入的插件默认待审批，要用户在面板里开独立开关） | 沙箱是全新数据根，一般没有该文件；若复用了旧 `<ROOT>`，删掉 `state/LocalAppData/N.E.K.O/` 下那个 json 再启 |
 
 另有两个 Windows 专属陷阱：`os.execve` 换解释器直接 **SIGSEGV**（已弃用，改子进程前台等待）；

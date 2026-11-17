@@ -777,6 +777,24 @@ session_id / source / hook_event_name」。删掉解析就同时改了一条对�
 - 反向对照：`run_controls11.py` 第 1 项改成撤掉 hard 判据（自检必须红），
   新增第 12 项纯输入攻击——两个号互换，`--strict` 退 1；12 组 + 对照 8 步全部符合预期
 
+### 工单 W01 + W02：大小写折叠误删与联接点盲区（本轮实跑复现后修掉）
+
+- W01 复现（本机 NTFS，`wf-out/attackB_case.py`）：先装 `demo_plugin`，再装 `DEMO_PLUGIN`，
+  两条命令都退 0，而 A 的 `aaa_secret_work.py` 没了；`plugin-rm --id DEMO_PLUGIN` 也退 0，
+  把实际装着的那个删掉。根因是 `dest.exists()` 在折叠文件系统上把两个不同 id 当同一目录。
+- 修法：`resolve_plugin_entry` 按目录里的真名解析，只差大小写就 die 并说明；
+  折叠与否用**探测**（造一个目录再用别种大小写问它在不在），不信 `os.name`。
+- W02 复现：`mklink /J` 造的 junction，`Path.is_symlink()` False、`os.path.islink` True、
+  `exists()` False → add 撞 traceback、rm 谎报「不存在」，插件树里永留脏条目。
+- 修法：`is_reparse_point` 读 `lstat` 的 `FILE_ATTRIBUTE_REPARSE_POINT(0x400)`；
+  摘链接统一 `remove_link`（`unlink` 失败退到 `rmdir`）。悬空 junction 现在 rm 退 0 且真摘掉。
+- 自检 +9 例（`_casefold_cases`、`_junction_cases`；非 Windows 或造不出 junction 时打印 SKIP）：
+  沙箱自检 187 项 → 196 项，退出码 0
+- 反向对照 `~/forge-scratch/run_controls17.py`：三臂行为验证（第二次装退 2 且 A 内容仍在、
+  rm 打错大小写退 2 且插件仍在、悬空 junction 退 0 且已摘除）+ 两组撤修复（各自让自检变红）+
+  对照组绿 —— 全部符合预期
+- SKILL.md 的坑表补第 8、9 条；标题里的「七个」去掉，改成不数条数的说法
+
 ### 仍未处理（写清楚，不算已解决）
 
 - `--include-docs` 没接进 CI：本仓文档里有大量示例文本会撞 SEC-1/3/4，逐条人工判过才能豁免。

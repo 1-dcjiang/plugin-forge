@@ -385,17 +385,23 @@ def cmd_plugin_add(args):
         die(f"plugin.toml 的 [plugin] id「{pid}」不合法：只允许 ^[A-Za-z_][A-Za-z0-9_]*$"
             "（与上游 generator.py 同规则），拒绝以防 rmtree 删到 plugins 之外")
 
-    dest = repo / "plugin" / "plugins" / pid
+    plugins_dir = repo / "plugin" / "plugins"
+    real_name, clash = resolve_plugin_entry(plugins_dir, pid)
+    if clash:
+        # 不查这一步，rmtree 会删掉另一个插件的工作内容，而且两条命令都退 0
+        die(f"{clash}。装进去会先删同名目录，等于抹掉另一个插件。"
+            "改插件 id（或先 plugin-rm 掉那个），别指望大小写当命名空间")
+    dest = plugins_dir / pid
     if args.link and os.name != "nt":
-        if dest.is_symlink():
-            dest.unlink()
+        if dest.is_symlink() or is_reparse_point(dest):
+            remove_link(dest)
         dest.symlink_to(src, target_is_directory=True)
         log(f"已软链 {src} -> {dest}")
     else:
         # 先软链装、再不带 --link 重装时，dest 是符号链接：rmtree 会直接报错。
         # 与上面 --link 分支同款处理，cmd_plugin_rm 也是这样判的。
-        if dest.is_symlink():
-            dest.unlink()
+        if dest.is_symlink() or is_reparse_point(dest):
+            remove_link(dest)
         elif dest.exists():
             shutil.rmtree(dest)
         shutil.copytree(src, dest, ignore=shutil.ignore_patterns(".git", "__pycache__", "*.pyc"))
@@ -416,13 +422,56 @@ def cmd_plugin_add(args):
             "插件会被注册但不会被 autostart；只能走 /plugin/<id>/start 手动拉起")
 
 
+REPARSE_ATTR = 0x400          # FILE_ATTRIBUTE_REPARSE_POINT
+
+
+def is_reparse_point(target):
+    """junction / 符号链接一类的再解析点。
+
+    Windows 的 junction 不是 symlink：`Path.is_symlink()` 对它回 False，
+    而 `shutil.rmtree` 按 `os.path.islink`（对它回 True）拒绝执行——两头不一致，
+    于是 add 崩、rm 谎报「不存在」。用 lstat 的属性判，一次判准。
+    """
+    try:
+        st = os.lstat(str(target))
+    except OSError:
+        return False
+    return bool(getattr(st, "st_file_attributes", 0) & REPARSE_ATTR)
+
+
+def remove_link(target):
+    """摘掉链接本身，不碰它指向的内容。目录型链接（junction、目录软链）要 rmdir。"""
+    try:
+        os.unlink(str(target))
+        return
+    except (IsADirectoryError, PermissionError):
+        os.rmdir(str(target))      # junction 与目录软链：unlink 抛，rmdir 才摘得掉
+
+
+def resolve_plugin_entry(plugins_dir, pid):
+    """返回 (真实条目名, 冲突说明)。
+
+    大小写不敏感的文件系统上，`DEMO_PLUGIN` 与 `demo_plugin` 是同一个目录，
+    但插件 id 在清单里是两个不同的插件。这里按实际目录名解析，并把冲突报出去。
+    """
+    try:
+        listed = os.listdir(plugins_dir)
+    except OSError:
+        return pid, None
+    for name in listed:
+        if name != pid and name.lower() == pid.lower():
+            return name, ("目录里已有「%s」，与请求的「%s」只差大小写；"
+                          "这台机器的文件系统把它们当同一个目录" % (name, pid))
+    return pid, None
+
+
 def classify_plugin_path(target):
     """判断 plugins/<id> 的安装形态。悬空软链必须先认出来。
 
     旧版先问 is_dir()：源目录被删后，悬空软链的 is_dir() 是 False，命令报「不存在」，
     后面那条 is_symlink() 分支永远走不到，软链清不掉。
     """
-    if target.is_symlink():
+    if target.is_symlink() or is_reparse_point(target):
         return "symlink"
     if target.is_dir():
         return "tree"
@@ -436,7 +485,12 @@ def cmd_plugin_rm(args):
     if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", args.id):
         die(f"--id「{args.id}」不合法：只允许 ^[A-Za-z_][A-Za-z0-9_]*$，"
             "拒绝以防 rmtree 删到 plugins 之外")
-    target = repo / "plugin" / "plugins" / args.id
+    plugins_dir = repo / "plugin" / "plugins"
+    real_name, clash = resolve_plugin_entry(plugins_dir, args.id)
+    if clash:
+        die(f"{clash}。要删的是那一个的话，请用目录里的真名「{real_name}」再来一次；"
+            "大小写不是插件的命名空间")
+    target = plugins_dir / args.id
     kind = classify_plugin_path(target)
     if kind == "absent":
         die(f"{target} 不存在")
@@ -444,8 +498,8 @@ def cmd_plugin_rm(args):
         log(f"[dry-run] 将删除 {target}（{kind}）")
         return
     if kind == "symlink":
-        target.unlink()          # shutil.rmtree 拒绝删符号链接，--link 装的要走这条路
-        log(f"已删除软链 {target}")
+        remove_link(target)      # 链接本体；rmtree 会拒绝，junction 还得靠 rmdir
+        log(f"已删除链接 {target}")
         return
     shutil.rmtree(target)
     log(f"已删除 {target}")
@@ -1026,6 +1080,148 @@ def _symlink_cases(bad):
     return n
 
 
+def _casefold_cases(bad):
+    """大小写折叠平台上，add/rm 不许拿另一个插件的目录当自己的。
+
+    判据来自终检工单 W01：旧行为是两条命令都退 0，而真装着的插件被 rmtree 掉。
+    文件系统不区分大小写时用探测得到（造一个目录，再用另一种大小写问它在不在），
+    不靠 os.name 猜——Wine、某些网络盘与 CI 容器的行为都不一样。
+    """
+    import contextlib
+    import io
+    import json
+    import tempfile
+    n = 0
+    td = Path(tempfile.mkdtemp(prefix="sb-case-"))
+    try:
+        plugins = td / "repo" / "plugin" / "plugins"
+        plugins.mkdir(parents=True)
+        (plugins / "demo_plugin").mkdir()
+        (plugins / "demo_plugin" / "work.txt").write_text("A 的工作内容\n", encoding="utf-8")
+        folded = (plugins / "DEMO_PLUGIN").exists()
+        n += 1
+        name, clash = resolve_plugin_entry(str(plugins), "DEMO_PLUGIN")
+        if folded:
+            if not clash or name != "demo_plugin":
+                bad.append("折叠文件系统上没认出大小写冲突：%r / %r" % (name, clash))
+        elif clash:
+            bad.append("大小写敏感的文件系统上却报了冲突：%r" % (clash,))
+        # 真装上 A，再用另一种大小写装 B：必须拒绝，且 A 的内容不能少
+        src_a = td / "src_a"
+        src_a.mkdir()
+        (src_a / "plugin.toml").write_text('[plugin]\nid = "demo_plugin"\n'
+                                           '[plugin_runtime]\nauto_start = true\n',
+                                           encoding="utf-8")
+        (src_a / "aaa_secret_work.py").write_text("A 的活\n", encoding="utf-8")
+        root = td / "root"
+        (root / "repo").mkdir(parents=True)
+        (root / "repo" / "plugin" / "plugins").mkdir(parents=True)
+        cfg = root / CONFIG_FILE
+        cfg.write_text(json.dumps({"repo": str(root / "repo")}), encoding="utf-8")
+        rc = 0
+        with contextlib.redirect_stdout(io.StringIO()):
+            cmd_plugin_add(argparse.Namespace(root=str(root), src=str(src_a), link=False))
+        if folded:
+            src_b = td / "src_b"
+            src_b.mkdir()
+            (src_b / "plugin.toml").write_text('[plugin]\nid = "DEMO_PLUGIN"\n',
+                                               encoding="utf-8")
+            (src_b / "bbb_other.py").write_text("B 的活\n", encoding="utf-8")
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                try:
+                    cmd_plugin_add(argparse.Namespace(root=str(root), src=str(src_b),
+                                                     link=False))
+                except SystemExit as e:
+                    rc = e.code or 0
+            n += 1
+            if rc == 0:
+                bad.append("大小写不同的第二个 id 被当成重装，没拒绝（这才是 W01 的原形状）")
+            n += 1
+            if not (root / "repo" / "plugin" / "plugins" / "demo_plugin"
+                    / "aaa_secret_work.py").exists():
+                bad.append("拒绝之前已经把 A 的内容删了——这才是要害")
+            # rm 同理：用另一种大小写要删，必须拒绝而不是删掉装着的那个
+            buf2 = io.StringIO()
+            with contextlib.redirect_stdout(buf2):
+                try:
+                    cmd_plugin_rm(argparse.Namespace(root=str(root), id="DEMO_PLUGIN",
+                                                     dry_run=False))
+                except SystemExit as e:
+                    rc2 = e.code or 0
+            n += 1
+            if rc2 == 0 and not (root / "repo" / "plugin" / "plugins"
+                                 / "demo_plugin").exists():
+                bad.append("rm 按另一种大小写把装着的插件删了，还退 0")
+    except OSError as e:
+        print("  SKIP: 大小写用例没跑成（%s）" % type(e).__name__)
+    finally:
+        shutil.rmtree(td, ignore_errors=True)
+    return n
+
+
+def _junction_cases(bad):
+    """联接点（junction）不是软链：形态要认出来，还要摘得掉，含悬空的那种。
+
+    判据来自终检工单 W02：旧代码 Path.is_symlink() 对 junction 回 False，
+    于是 classify 判成 tree，rmtree 按 os.path.islink 拒绝执行 → traceback；
+    悬空 junction 的 exists() 也是 False，被当成「不存在」，插件树里永远留个脏条目。
+    """
+    import contextlib
+    import io
+    import tempfile
+    n = 0
+    if os.name != "nt":
+        print("  SKIP: junction 是 Windows 的东西，本机器造不了，形态用例未跑")
+        return n
+    td = Path(tempfile.mkdtemp(prefix="sb-junc-"))
+    try:
+        tgt = td / "target"
+        tgt.mkdir()
+        (tgt / "keep.txt").write_text("内容\n", encoding="utf-8")
+        link = td / "dev_plugin"
+        r = subprocess.run(["cmd", "/c", "mklink", "/J", str(link), str(tgt)],
+                           capture_output=True, text=True, encoding="utf-8", errors="replace")
+        if not os.path.lexists(str(link)):
+            print("  SKIP: 这台机器造不出 junction（mklink 回 %s）" % r.returncode)
+            return n
+        n += 1
+        if is_reparse_point(link):
+            pass
+        else:
+            bad.append("junction 没被 is_reparse_point 认出来")
+        n += 1
+        if classify_plugin_path(link) != "symlink":
+            bad.append("junction 的形态判成 %s，应当按链接处理" % classify_plugin_path(link))
+        n += 1
+        remove_link(link)
+        if os.path.lexists(str(link)):
+            bad.append("remove_link 没摘掉 junction")
+        if not tgt.is_dir():
+            bad.append("摘 junction 把目标内容一起删了")
+        # 悬空 junction：目标先删掉
+        link2 = td / "dangling_plugin"
+        tgt2 = td / "target2"
+        tgt2.mkdir()
+        subprocess.run(["cmd", "/c", "mklink", "/J", str(link2), str(tgt2)],
+                       capture_output=True, text=True, encoding="utf-8", errors="replace")
+        shutil.rmtree(tgt2)
+        if os.path.lexists(str(link2)):
+            n += 1
+            kind2 = classify_plugin_path(link2)
+            if kind2 != "symlink":
+                bad.append("悬空 junction 判成 %s（旧行为是 absent，于是永远清不掉）" % kind2)
+            n += 1
+            remove_link(link2)
+            if os.path.lexists(str(link2)):
+                bad.append("悬空 junction 摘不掉")
+    except OSError as e:
+        print("  SKIP: junction 用例没跑成（%s）" % type(e).__name__)
+    finally:
+        shutil.rmtree(td, ignore_errors=True)
+    return n
+
+
 def _self_test():
     """环境变量过滤、插件 id 校验与安装形态判断的回归自检（CI 跑，见 sync-check.yml）。"""
     keep = ["PATH", "SYSTEMROOT", "HOME", "LOCALAPPDATA", "APPDATA", "TEMP", "COMSPEC",
@@ -1520,7 +1716,9 @@ def _self_test():
         bad.append("plugin-add/rm 用例没跑成：" + type(e).__name__)
     finally:
         shutil.rmtree(pa_root, ignore_errors=True)
-    total = (len(keep) + len(drop) + len(bad_ids) + len(good_ids) + len(stop_cases)
+    cf_n = _casefold_cases(bad)
+    jc_n = _junction_cases(bad)
+    total = cf_n + jc_n + (len(keep) + len(drop) + len(bad_ids) + len(good_ids) + len(stop_cases)
              + len(verdict_cases) + len(posix_cases) + len(no_ps_cases)
              + len(stat_cases) + len(alive_cases) + wg_n + len(x_tomls) + len(x_flags)
              + len(x_rows) + x_n + hw_n + ra_n + len(kill_cases) + pa_n) + _symlink_cases(bad)
