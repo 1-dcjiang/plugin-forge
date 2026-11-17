@@ -159,10 +159,11 @@
 
 1. **框架层**：官方通用 `Blocking error` 条目自带 "On events that can block" 限定，与 §1.2-a 的 per-event 例外表**不构成冲突**——通用表格列 `exit 0` 成功 / `exit 1` 非阻塞警告 / `exit 2` 阻塞（仅适用于 `#### Exit code 2 behavior per event` 表中 `Can block? = Yes` 的事件）；按 §1.2-a，**`SessionStart` 在该表为 `Can block? = No`，`exit 2` 仅把 stderr 显示给用户、不阻塞会话**（"Claude doesn't see it, and the session or subagent proceeds"）。若脚本进程无法启动或超过宿主 `timeout`，会话仍继续。
 2. **脚本层（工程纪律）**：所有可预期异常（文件缺失、JSON 解析失败、stdin 非法 JSON、内部软截止）均在脚本内捕获，输出**合法 `HookOutput` JSON + 降级提示 + `exit 0`**。选 exit 0 而非 1 的理由：`exit 1` 会丢弃 stdout（`exit 1` 时 stderr 显示为警告、stdout 忽略），降级提示只能进 stderr；`exit 0` 能让「检测失败、请手动复核」通过 `additionalContext` 进入上下文。统一 exit 0 是纪律要求，**不是**因为 exit 2 会阻塞会话（§1.2-a 已否定该前提）。
-3. **超时层**：宿主 `timeout: 10`；脚本内置 **`SOFT_DEADLINE = monotonic() + 8.0s`**（`session_capability_refresh.py:36`），到点抛 `TimeoutError` 被捕获，输出「部分扫描」结果并标注结论非全量，留 2 秒余量给 JSON 序列化与进程退出。
+3. **超时层**：宿主 `timeout: 10`；脚本内置 **`SOFT_DEADLINE = monotonic() + 8.0s`**（`session_capability_refresh.py:36`），到点抛 `TimeoutError` 被捕获，输出固定单行降级文本 `FALLBACK_CONTEXT`，**不输出部分结果**（与脚本头「超时安全」那句同一口径），留 2 秒余量给 JSON 序列化与进程退出。
 4. **降级文本同样受 §1.2-d 约束**：客观陈述、不夹带指令、不诱导越权。
 
 > 已实测：正常 stdin / 空 stdin / 非法 JSON stdin 三路径均输出合法 JSON、`continue:true`、`exit 0`。
+> 2026-11-17 补测：软截止路径同样只输出 `FALLBACK_CONTEXT` 一条（`--self-test` 里钉成断言，破坏它的那组反向对照立刻变红）。本节改的是对「输出什么」的描述，降级、不阻塞、合法 JSON、`exit 0` 四项契约没动。
 
 ## 7. 证据分级与「未联网核验项」标注规则
 
@@ -238,7 +239,7 @@ cp "~/.workbuddy/settings.json.pre-neko-baseline-hook.bak" "~/.workbuddy/setting
 | 黄金信号 | 指标 | 阈值 / 动作 |
 |---|---|---|
 | 延迟 | 检测脚本执行耗时 | 脚本内 `SOFT_DEADLINE = monotonic() + 8.0s`（`session_capability_refresh.py:36`）软截止；宿主 `hooks.timeout = 10s`，超时即视为降级，须检查磁盘/文件数 |
-| 错误 | 降级输出次数 | 连续 2 个新会话出现「脚本异常/部分扫描」→ 停止自动化并人工复核 |
+| 错误 | 降级输出次数 | 连续 2 个新会话出现「本次检测不可用」这条降级文本 → 停止自动化并人工复核 |
 | 流量 | 每会话注入字节数 | 实测 `additionalContext` ≈ 1.1 KB；超过 4 KB 应精简快照，避免挤占上下文（且它是不可见 system-reminder，见 §1.2-d） |
 | 饱和度 | 误报率 | 无差异却连续报「有变更」→ 优先怀疑三处基线未原子同步（§4），或误用整文件 hash |
 
