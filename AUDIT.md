@@ -916,6 +916,18 @@ session_id / source / hook_event_name」。删掉解析就同时改了一条对�
 - 已知上限（写在文件头的 shortcut 里）：`PAIRS` 是硬清单，漏加一个新部署面就漏检一次。
   出现第三类需要按目录展开的副本时，改成读 install_sync 的清单
 
+### JSON 解析步的覆盖面收窄（姊妹仓 CI 假红带出的本仓同型缺陷）
+
+coopanion-forge 那边 `pnpm install` 进工作区以后，`JSON artifacts parse` 的递归 glob
+开始解析第三方包的 JSONc，CI 退 1。本仓那一步是同一句 kernel 写法，同一个洞：
+`glob.glob('**/*.json', recursive=True)` 不认 vendored 目录。本仓现在没有 npm 安装步，
+所以没炸，属未爆的雷。
+
+- 排除 vendored 目录，并且先归一化分隔符：第一版只判 `'/node_modules/' not in '/'+p`，
+  Linux 上对、Windows 上 glob 给反斜杠就不认，同一判据两边结论相反
+- 验收用 yml 里那一行原样命令，在 `forge-scratch/jsontest` 夹具上跑：
+  本仓产物放坏 JSON 退 1；只留 `node_modules/tslib/package.json`（带注释）退 0
+
 ### 仍未处理（写清楚，不算已解决）
 
 - `--include-docs` 没接进 CI：本仓文档里有大量示例文本会撞 SEC-1/3/4，逐条人工判过才能豁免。
