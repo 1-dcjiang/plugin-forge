@@ -857,6 +857,26 @@ session_id / source / hook_event_name」。删掉解析就同时改了一条对�
 - 未做：`--include-docs` 接 CI 仍在待办（文档里示例文本多，需逐条判）；
   攻击侧只补了证据里点名的家族，其余同类后缀按 13 §6 属 [未核实]，靠新的盲区账兜住
 
+### 工单 W06（含 W18.2 那一格）：构建入口文件不要准奏，讲构建文件的文档别再误钉
+
+- 攻击形状（证据 14，本机 GNU make 实跑 `GNUmakefile-won`）：`is_protected` 的
+  `base = name.split(".")[0]` 只认 makefile/dockerfile/containerfile/justfile 四个词，
+  `GNUmakefile` 拆出 `gnumakefile` 不命中 → 判成「非代码」→ ALLOW
+- 修法只动判据顺序，不加新机制：整名名单 → 已知文档扩展名短路 → base 拆名
+  - `BUILD_FILE_NAMES` 补 `gnumakefile / rakefile / sconstruct / sconscript / workspace`
+  - 新增 `BUILD_FILE_WHOLE`（只认整名）：`cmakelists.txt / meson.build / build / build.bazel / workspace.bazel / .bazelrc`
+    —— 这几个的点号后部分是文件名的一部分，塞进 base 名单会连 `build.log` 都要准奏
+  - 新增 `DOC_EXTS` 短路：`docs/Makefile.md` 是散文不是构建入口（W18.2 反向用例，本轮一起收）
+- 明写不覆盖（docstring 点名 + 自检用 `False` 期望钉住，不装全覆盖）：
+  `meson_options.txt`、`settings.gradle` 这类 `*.gradle` 子文件、Gemfile、Podfile
+- 反证 21（`forge-scratch/run_controls21.py`）六臂实跑：
+  臂0 现码四个构建入口逐条 REFUSE、三个良性文件 ALLOW；
+  臂0b 工单前的仓库版同一组输入 → 四个入口全 ALLOW 且 `docs/Makefile.md` 反倒 REFUSE（两个缺陷同时复现）；
+  臂1 撤 `gnumakefile` / 臂2 撤文档短路 / 臂3 撤整名名单 / 臂4 把整名判据挪到文档短路之后
+  —— 各退 1 且红在对应期望行；臂5 对照组绿
+- 未实测项照原样标着：cmake / meson / rake / scons / bazel 本机都没装，
+  「工具真读取并执行这些文件」是工具文档口径 [读证]，只有 GNU make 那条是本机 [实测]
+
 ### 仍未处理（写清楚，不算已解决）
 
 - `--include-docs` 没接进 CI：本仓文档里有大量示例文本会撞 SEC-1/3/4，逐条人工判过才能豁免。
