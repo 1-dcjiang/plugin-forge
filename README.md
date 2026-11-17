@@ -31,7 +31,7 @@ N.E.K.O 是 Apache-2.0 项目。本仓库只引用它的路由、契约、端口
 
 ## 机制
 
-- 契约先行：`agents/plugin-forge-contract.md` 持真实否决权，没有准奏不写码。准奏落盘 `contract-approval.json`，写码前由 `skills/plugin-forge/scripts/check_contract_approval.py` 机器校验；scope 外的文件同样拒绝。
+- 契约先行：`agents/plugin-forge-contract.md` 持真实否决权，没有准奏不写码。准奏落盘 `contract-approval.json`（含 `verify_commands`：每条都得是能直接跑起来的验收命令），写码前由 `skills/plugin-forge/scripts/check_contract_approval.py` 机器校验；scope 外的文件同样拒绝。
 - 先搜后建（rbb）：Workflow A 第 1a 步做三轮检索，判决取加入上游 / 做官方扩展 / 分叉并保持同步 / 自建四档之一，小改动走快速档。权威本体是上游插件 reuse_before_build，本团只引用不内嵌。条文见 skills/plugin-forge/SKILL.md 铁律 3 与 skills/plugin-forge/references/workflows.md。
 - TDD + 极简 + 安全门禁 + 运行时验证（`skills/neko-plugin-sandbox/` 真实冒烟）。
 - 工作流 H：宿主破坏性变更（RFC/changelog）对插件机队的影响审计与上游回帖礼仪。

@@ -29,7 +29,7 @@ Codex 没有子代理：由你**一个代理按工作流顺序连续角色扮演
 3. 【架构设计师】分层草图：纯逻辑 / 宿主适配 / 展示三层 + 模块接口 + 测试面。
 4. 【契约审议师】对照 profile 能力面逐条审议，输出准奏/封驳裁决（封驳必须附编号理由 + 改法）。
    准奏后由【交付总监】把裁决落盘到项目根 `contract-approval.json`（格式见 skill references 的
-   contract-approval.schema.json）；写码前跑
+   contract-approval.schema.json，含 `verify_commands`）；写码前跑
    `python <skill 目录>/scripts/check_contract_approval.py --approval <项目根>/contract-approval.json <要写的文件…>`，
    脚本 REFUSE 即不许动笔。
    **连续 2 次封驳：停下，向用户给出裁决请求（降范围 / 换方案 / 放弃）。**
