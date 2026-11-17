@@ -423,12 +423,40 @@ DETACHED 那半个仍没覆盖：它只在 Windows 真起进程时才走得到�
 
 ### 仍没清掉的
 
-- `session-refresh-sop.md` 第 98 行「解析 `session_id / source / hook_event_name`」与第 162 行
-  「输出「部分扫描」结果」都跟代码不符。那一份是作者单机文档，改它要走他自己的窗口，本轮没动。
+- `session-refresh-sop.md` 第 98 行那句「解析 payload 字段」本轮已按代码改对（见下面两处文档-代码不符那一节）。
+  第 162 行「输出「部分扫描」结果并标注结论非全量」与第 241 行那条引用它的告警行仍未改：
+  代码走的是固定单行降级，不输出部分结果。那两处属于 §6 降级契约的对外披露文本，改它要走作者的窗口。
 - §7.1 的 147、149、157、164，第 85 行的四个活动字段，第 101 行的常量块名，第 178 行的 docs 清单：
   探针看不见，本轮没逐条重读语义，引用前先重核。
 - DETACHED 分支的实测只到注入那一层。真起进程时父任务被 job object 回收的那一半仍未量过。
 - 沙箱根 `forge-sandbox-start` 与 `forge-sandbox-refuse` 留在本机，随时可整删。
+
+### 坑 #4 的两半都量完了（2026-11-17 09:20，Windows）
+
+上一轮我只量了「普通父命令退出」那一半。这一轮把另一半也量了：把 `serve` 交给受管后台任务，
+等服务起来以后终止那个任务。
+
+- 起服务：包装进程 64424（父是宿主），服务子进程 74768（父是包装进程），`sandbox.json` 记的正是 74768。
+  uvicorn `Application startup complete`，`/health` 200。
+- 终止受管任务：包装进程与服务子进程**一起消失**。进程表里查无 74768，43117 无应答，残留服务进程 0 个。
+  这就是 `DETACHED_PROCESS` 挡不住 job object 那句话的实测依据。
+- 状态文件留在了那里。紧接着跑一次 `stop`，它走的是 `gone` 分支：
+  「pid=74768 的进程已不存在（服务已退出或中途崩了），只清理状态文件」，不发信号、不碰任何进程，删掉状态文件。
+- 结论落到 SKILL.md 第 4 坑那一行：要常驻就 `serve` 交给受管任务；任务被终止就等于服务被回收，
+  不需要额外收尾，下一次 `stop` 会自动把留下的状态清干净。
+
+### §7.1 与 SOP 的两处文档-代码不符
+
+- `profile-neko.md` §7.1 原来只用符号锚点，并写明「本节不写行号」。那句话让它整节落在探针之外：
+  行号漂了没人知道。现在四个符号都带上了在 `e14f61963` 上核对过的行号（`export_package` def 435、
+  体内 mkdir 441 与 `zipfile.ZipFile(..., compression=ZIP_DEFLATED)` 447；`class BuildResult` 277、
+  `_validate_layout` 292；`install-plan` 路由 350、`install` 路由 327；`on_conflict` 300/438、
+  `confirmation_token` 59/305、`must be inside` 210）。探针覆盖数因此从 71 涨到 75 条，全对。
+  顺带改正一处引用不实：文中写的是 `zipfile.ZipFile(package_path, "w")`，上游那句带 `compression=zipfile.ZIP_DEFLATED`。
+- `session-refresh-sop.md` 第 98 行写「读 stdin：解析 `session_id / source / hook_event_name`」。
+  代码从不使用 payload 里的任何字段，本轮又把那份没人读的 `json.loads` 删了，于是把这句改成
+  「读 stdin 并排空」，并写明读的唯一理由是不读会等 EOF 挂住。这不是改契约，是把一句写错的事实改对：
+  降级路径与 exit 0 的纪律没动过。
 
 ### 部署副本曾经悄悄落后 5 天
 
