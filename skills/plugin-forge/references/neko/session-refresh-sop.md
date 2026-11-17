@@ -101,7 +101,7 @@
 1. **读 stdin 并排空**：脚本不使用 payload 里的任何字段。读的理由只有一个——宿主不关 stdin 时，不读就会等 EOF 而挂住。读失败不得报错，按空输入继续（已实测降级路径可用）。旧版本还顺手 `json.loads` 一份却没人读，2026-11-17 删掉，本节同期改正这句话。
 2. **扫描 12 个检测点**：严格按 `capability-baseline.md` §2 的「变更检测清单」逐项读取（路径与字段见该表，此处不重复）。
 3. **计算指纹**：受控字段子集 → `json.dumps(sort_keys=True, ensure_ascii=False, separators=(',',':'))` → sha256 前 12 位；与 `BASELINE` 常量比对。
-4. **就绪检查**：核对 8 个 hook 脚本存在性；任一缺失即记入差异（启动失败风险）。
+4. **就绪检查**：核对本工程那 1 条 hook 脚本的存在性，并扫两个配置根的注册表——注册指向不存在的文件就记入差异（工单 W12 选 B 之后改的判据：以前写死 8 条路径，其中 7 条属于外部组件 Hindsight，整目录消失后每轮都报「缺失」却修不掉，而真正坏的「注册还在、文件没了」这一类反而看不见）。
 5. **生成当前快照**：MCP 启用/禁用清单、连接器目录项数、生效配置 hooks 事件/命令数、marketplace 目录与清单数、插件版本、skills 数、hook 脚本就绪数。
 6. **判定有无差异**：按 §3 规则。
 7. **输出上下文**：只有 `hookSpecificOutput.additionalContext`，内容按 §3 的幂等输出约定（无差异只报一句话 + 快照，不写文件）。脚本不写 `continue` 字段，同段下一条与 `emit()` 为准。
@@ -117,7 +117,8 @@
 - `mcpServers` / marketplace 清单 / marketplace 目录 / skills 目录出现**新增或删除**；
 - `connectors/default/mcp.json` 项数 ≠ 208；
 - `plugin.json` 的 `version` 变化；
-- 8 个 hook 脚本任一缺失；
+- hook 注册悬空（settings.json 里注册的命令指向不存在的文件）；
+- 本工程自己的 hook 脚本缺失；
 - 任一文件 `<MISSING>` / `<UNREADABLE>`（视为差异 + 读取异常，不得静默）。
 
 **不计为差异**（避免误报噪声）：`settings.json` 中 `requestDeliveries`、`officeFileAssociationsRepairMarker`、时间戳类字段；文件 mtime 变化；JSON 缩进/键顺序变化（指纹已 `sort_keys` 归一）；新增 `references/*.md` 或 `scripts/` 目录（不在 12 个检测点内）。

@@ -1218,7 +1218,46 @@ PF 这条线是断的。
 未落地两条：W19.6 与 W19.8 属人设文字，机器杆已有（`tests/test_agents_wiring.py`）；
 W12 与 W13 那三条指纹漂移与 6 条悬空 hook 注册仍在等你拍板，见下面「仍未处理」。
 
-### 仍未处理（写清楚，不算已解决）### 仍未处理（写清楚，不算已解决）
+
+### 工单 W12 选 B：判据从「写死 8 条路径」换成「扫注册表查悬空」
+
+用户 2026-11-18 选了 B（承认 Hindsight 离场，删悬空注册），不是 A（重装）。
+落地的不是删注册本身——`settings.json` 属用户域，执行器交给用户跑。
+
+判据改动（`scripts/session_capability_refresh.py`）：
+
+- `HOOK_SCRIPTS` 从 8 条缩到 1 条。剩下 7 条属于外部组件 Hindsight，
+  整目录 `~/.hindsight/coding-agents` 实测不存在（`os.path.isdir` 为假）。
+  把它们列在本工程名单里，等于每轮报「Hook 脚本缺失 7 条」却永远修不掉，
+  还把别人的缺席报成本工程缺陷
+- 新增 `dangling_hooks(settings, exists)`：直接读两根 `settings.json` 的
+  `hooks.<event>[].hooks[].command`，把里面的脚本路径归一化反斜杠后问在不在。
+  实测现机器出 6 条：workbuddy 3 条 + codebuddy 3 条，全是 hindsight 的 dist/*.js。
+  这才是「每次会话三声 node 报错」的正面观测
+- `HOOK_TARGET_RE` 的字符类不含反斜杠，所以匹配前必须把命令串里的 `\` 换成 `/`。
+  第一版没换，报出来的行只剩最后一段文件名，读者没法对照 `settings.json` 删哪一条。
+  这条是反证 33 第三臂「没咬住」暴露的——夹具只喂了正斜杠形状，等于没测 Windows
+- `_read` 的 256 KiB 上限换成 `MAX_READ_BYTES = 8 MiB`。实测
+  `workbuddy-connector-plugins-official/.codebuddy-plugin/marketplace.json` 是
+  1 498 928 B、964 项，被旧上限判成 `<UNREADABLE>`，于是差异行报的是「读不动」
+  而不是真实增长 350 → 964。自检加一条 1.5 MB 量级的夹具钉住
+- `_path()`：路径行的消毒只去控制字符（Cc/Cf），保留 `/`、`:`、空格。
+  `_safe` 会把分隔符换成下划线，报出来的路径读起来像乱码，
+  而这一行正是要人拿去删注册的
+- 自检 76 → 79 项。反证 33 五臂：撤悬空检测、撤上限、撤反斜杠归一化、
+  把 hindsight 写回名单、对照组，全部符合预期
+- 文档同轮改三处：`capability-baseline.md` 检查项 #10 与现值更正段、
+  `session-refresh-sop.md` §2 第 4 步与 §5 报警条件
+
+执行器（用户跑）：`python -I C:/Users/54301/pf-report/w12_remove_dangling_hooks.py`
+预演已实跑：悬空 6 条、在位 2 条（haloflux-lab 的 session-beacon.mjs 与本工程挂载份），
+加 `--apply` 才写盘，写盘前两份 settings.json 备份到 `pf-report/settings-backup-<时间戳>`。
+硬约束照写进代码：只删不挂，绝不往 `~/.codebuddy` 加注册。
+
+W13 的前置就是这条：B 案落地后 `settings.workbuddy` 与 `mcp.workbuddy` 指纹会再变一次，
+BASELINE 等那时一起刷（用户口径）。
+
+### 仍未处理（写清楚，不算已解决）### 仍未处理（写清楚，不算已解决）### 仍未处理（写清楚，不算已解决）
 
 - `--include-docs` 没接进 CI：本仓文档里有大量示例文本会撞 SEC-1/3/4，逐条人工判过才能豁免。
 - 探针默认覆盖面仍是两份文档。`references/neko/` 那 21 份也带行号形状（`host.py:11`、`schema.py:107` 这类），

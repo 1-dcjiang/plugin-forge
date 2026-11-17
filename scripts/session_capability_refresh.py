@@ -33,7 +33,7 @@ NEKO 专家团 · SessionStart 能力底座变更检测 hook（只读 / 零依�
   ~/.workbuddy/settings.json 才是本机 WorkBuddy 生效配置；
   ~/.codebuddy/settings.json 并存且带另一套 hindsight codebuddy-* hooks；两个配置根相互独立。
 """
-import sys, os, json, hashlib, glob, time, re
+import sys, os, json, hashlib, glob, time, re, unicodedata
 
 BASELINE_DATE = "2026-11-07"
 SOFT_DEADLINE = time.monotonic() + 8.0
@@ -41,6 +41,15 @@ SOFT_DEADLINE = time.monotonic() + 8.0
 def _safe(s, n=64):
     """S6: 所有动态值消毒为 [A-Za-z0-9._-] 并截断，避免注入不可见上下文。"""
     return re.sub(r"[^A-Za-z0-9._-]", "_", str(s))[:n]
+
+
+def _path(s, n=200):
+    """路径专用的消毒：只去掉控制字符（Cc/Cf），保留 / : 与空格。
+    shortcut: 用 _safe 会把分隔符换成下划线，路径读起来像乱码，
+    而这行正是要人拿去删注册的。
+    """
+    return "".join(ch for ch in str(s)
+                   if unicodedata.category(ch) not in ("Cc", "Cf"))[:n]
 
 ROOT = os.path.expanduser("~/.workbuddy")
 CODEBUDDY = os.path.expanduser("~/.codebuddy")  # forge-declared: SEC-1 理由=按设计只读单机 CLI 配置做能力快照 出处=AUDIT.md#sec-declared 复审=2026-12-15
@@ -81,16 +90,45 @@ BASELINE = {
 MCP_KEYS = ("type", "url", "command", "args", "timeout", "disabled", "env", "headers",
             "transportType", "enabled", "staticHeaders")
 
+# 本工程自己要确保在位的 hook 脚本。
+# 2026-11-18 工单 W12 选 B：Hindsight 那七条从这里删掉。整目录
+# `~/.hindsight/coding-agents` 已不存在（实测 `os.path.isdir` 为假），
+# 列在这里就是把「别人的组件没装」报成本工程的「Hook 脚本缺失」，永远修不掉。
 HOOK_SCRIPTS = [
-    HINDSIGHT + "/workbuddy-sessionstart-hook.js",
-    HINDSIGHT + "/workbuddy-hook.js",
-    HINDSIGHT + "/workbuddy-stop-hook.js",
-    HINDSIGHT + "/mcp-server.js",
-    HINDSIGHT + "/codebuddy-sessionstart-hook.js",
-    HINDSIGHT + "/codebuddy-hook.js",
-    HINDSIGHT + "/codebuddy-stop-hook.js",
     ROOT + "/skills/haloflux-lab/scripts/session-beacon.mjs",
 ]
+
+# 脚本文件路径出现在 hook 命令里的样子。node 与 python 两种写法都覆盖：
+# 引号包住的与裸写的都算，所以先把引号去掉，再取以 .js/.mjs/.cjs/.py 结尾的整段路径。
+HOOK_TARGET_RE = re.compile(r"([\w./:\-]+\.(?:js|mjs|cjs|py))")
+
+
+def dangling_hooks(settings, exists=None):
+    """settings.json 真注册了什么，就去查那个文件在不在。
+
+    以前的判据只看一份手写名单，看不见「注册指向已删文件」这一类。
+    这类是真缺陷：每次会话这三个事件都会起 node 打空（工单 W12 实测 6 条）。
+    `settings` 是 [(路径, 解析后的字典), ...]，由调用方给；`exists` 是注入接缝，
+    与 build_context 用同一个，自检才能不碰真机。
+    """
+    exists = exists or os.path.isfile
+    out = []
+    for path, data in settings:
+        for event, groups in (data.get("hooks") or {}).items():
+            for grp in groups or []:
+                for hook in (grp.get("hooks") or []):
+                    # Windows 命令里全是反斜杠，而反斜杠不在路径字符类里：
+                    # 不归一化就只能匹配到最后一段文件名，读者看不出该删哪条注册。
+                    cmd = str(hook.get("command") or "").replace("\\", "/")
+                    for m in HOOK_TARGET_RE.finditer(cmd):
+                        tgt = m.group(1).replace("\\", "/")
+                        if not exists(os.path.expanduser(tgt)):
+                            root_label = os.path.basename(
+                                os.path.dirname(path).rstrip("/")).lstrip(".") or "?"
+                            short = tgt.replace(os.path.expanduser("~/"), "~/")
+                            out.append("%s 的 %s 指向不存在的文件：%s"
+                                       % (root_label, event, short[:160]))
+    return out
 
 def _norm(o):
     return json.dumps(o, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
@@ -98,8 +136,13 @@ def _norm(o):
 def _fp(o):
     return hashlib.sha256(_norm(o).encode("utf-8")).hexdigest()[:12]
 
+# 单文件读取上限。以前是 256 KiB，实测把 workbuddy-connector-plugins-official 的清单
+#（1 498 928 B、964 项，2026-11-18 现数）判成 `<UNREADABLE>`。
+# 那是合法大数据，不是坏文件；报成读不动反而把真实漂移盖住了。
+MAX_READ_BYTES = 8 * 1024 * 1024
+
 def _read(p):
-    if os.path.getsize(p) > 256 * 1024:
+    if os.path.getsize(p) > MAX_READ_BYTES:
         raise ValueError("file too large")
     with open(p, "r", encoding="utf-8-sig") as f:
         return json.load(f)
@@ -221,6 +264,25 @@ def build_context(cur, notes, read=None, exists=None):
     missing = [p for p in HOOK_SCRIPTS if not exists(p)]
     for p in missing:
         diffs.append("  - Hook 脚本缺失: " + _safe(p.replace(os.path.expanduser("~/"), "~/")))
+    # 注册悬空：settings.json 里还挂着指向已删文件的命令（工单 W12 那一类）
+    regs = []
+    for root in (ROOT, CODEBUDDY):
+        p = root + "/settings.json"
+        try:
+            v = read(p)
+        except Exception:
+            v = None
+        if isinstance(v, dict):
+            regs.append((p, v))
+    dangling = dangling_hooks([(p, v) for p, v in regs if isinstance(v, dict)], exists)
+    if dangling:
+        diffs.append("  - Hook 注册悬空 %d 条（注册指向不存在的文件，每次会话起进程打空）"
+                     % len(dangling))
+        for d in dangling[:6]:
+            # 这一行要给人拿去删注册，用 _safe 会把 / : 空格全换成下划线，读起来像乱码
+            diffs.append("      - " + _path(d))
+    if len(dangling) > 6:
+        diffs.append("      ...另有 %d 条，见 settings.json" % (len(dangling) - 6))
 
     try:
         ms = read(ROOT + "/mcp.json").get("mcpServers", {})
@@ -342,13 +404,21 @@ def _self_test():
     try:
         big = os.path.join(td, "big.json")
         with open(big, "wb") as f:
-            f.write(b'{"a":"' + b"x" * (300 * 1024) + b'"}')
+            f.write(b'{"a":"' + b"x" * (MAX_READ_BYTES + 1) + b'"}')
         refused = False
         try:
             _read(big)
         except ValueError:
             refused = True
-        chk("_read 拒绝超过 256KB 的文件", refused)
+        chk("_read 拒绝超过上限的文件", refused)
+        # 上限不能拍太小：connector-plugins-official 的清单实测 1 498 928 B（964 项），
+        # 旧的 256 KiB 把它判成读不动，于是每一项差异都变成假信号
+        mid = os.path.join(td, "mid.json")
+        with open(mid, "wb") as f:
+            f.write(b'{"plugins": [' + b'{"a":1},' * 190000 + b'{"a":1}]}')
+        chk("1.5MB 量级的合法清单要读得动",
+            os.path.getsize(mid) > 256 * 1024 and isinstance(
+                _read(mid).get("plugins"), list))
         small = os.path.join(td, "small.json")
         with open(small, "wb") as f:
             f.write("﻿".encode("utf-8") + b'{"members": [{"agent_id": "x"}]}')
@@ -408,12 +478,37 @@ def _self_test():
                         [], read=ok_read, exists=all_there)
     chk("删掉的目录要报删除", "删除 marketplace 目录" in ctx)
 
-    # 5) Hook 脚本缺失：单独成行，就绪计数跟着掉
-    half = lambda p: not p.endswith("workbuddy-stop-hook.js")
+    # 5) Hook 脚本缺失：单独成行，就绪计数跟着掉。
+    #    名单现在只剩本工程自己那一条，夹具就撤这一条。
+    half = lambda p: not p.endswith("session-beacon.mjs")
     ctx = build_context(base, [], read=ok_read, exists=half)
     chk("缺失的 Hook 脚本要单列", "Hook 脚本缺失" in ctx)
     chk("就绪计数按缺失扣减",
         "Hook 脚本就绪: %d/%d" % (len(HOOK_SCRIPTS) - 1, len(HOOK_SCRIPTS)) in ctx)
+    # 5b) 注册悬空（工单 W12 选 B 后新增的那一类）：夹具喂 settings 字典，不碰真机
+    fake_root = "~/wb/settings.json"
+    set_wb = {"hooks": {"SessionStart": [{"hooks": [
+        {"type": "command", "command": 'node "~/.hindsight/coding-agents/dist/gone.js"'}]}],
+        "Stop": [{"hooks": [{"type": "command",
+                             "command": '"C:/x/python.exe" "~/.workbuddy/hooks/keep.py"'}]}]}}
+    # Windows 形状的注册命令全是反斜杠。不归一化就只能匹配到最后一段文件名，
+    # 报出来的行没法拿去对照 settings.json（反证 33 第三臂实测这条当时没有判据覆盖）
+    B = chr(92)
+    win_cmd = ("node " + chr(34) + "C:" + B + "Users" + B + "me" + B + ".hindsight" + B
+               + "coding-agents" + B + "dist" + B + "workbuddy-sessionstart-hook.js" + chr(34))
+    win = {"hooks": {"SessionStart": [{"hooks": [{"type": "command", "command": win_cmd}]}]}}
+    dw = dangling_hooks([("~/wb/settings.json", win)], lambda p: False)
+    chk("反斜杠路径也要认出来", len(dw) == 1)
+    chk("报出来的路径要保留目录部分", bool(dw) and "coding-agents" in dw[0] and B not in dw[0])
+    dk = dangling_hooks([(fake_root, set_wb)], lambda p: p.endswith("keep.py"))
+    chk("悬空注册要被报出来", len(dk) == 1 and "SessionStart" in dk[0])
+    chk("在位的注册不许误报", all("keep.py" not in x for x in dk))
+    ctx2 = build_context(base, [], read=lambda p: ({"hooks": set_wb["hooks"]}, None)[0],
+                         exists=lambda p: False)
+    chk("注册悬空要进差异", "Hook 注册悬空" in ctx2)
+    # 外部组件缺席不再算本工程缺陷：HOOK_SCRIPTS 里不该再有 hindsight 路径
+    chk("Hindsight 路径不再进本工程名单",
+        not any("hindsight" in p.lower() for p in HOOK_SCRIPTS))
 
     # 6) 快照取不到时降级成说明，不许抛
     def boom(p):

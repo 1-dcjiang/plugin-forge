@@ -70,6 +70,15 @@ backups.workbuddy=2  backups.codebuddy=2
 | 运行时 | Python 3.13.14 / Node v22.22.2 | 系统 PATH | 可用 | 检测脚本零第三方依赖 | 2026-11-06 | [FACT/LOCAL] |
 | 官方规范 | SessionStart / additionalContext | `workbuddy.ai/docs/ide/Features/hooks` | 已联网核验 | 每会话一次（conversationId）、matcher `source=startup`、并行执行、自动去重、Session Tracking；**事件专项语义修正见 `session-refresh-sop.md` §1** | 2026-11-06 | [FACT/DOCS] |
 
+**上表两行的现值更正（2026-11-18 现读，不改写 11-06 那一列，历史值留着）。**
+`Hook 脚本 | 8 个 | 8/8 存在` 已不成立：`~/.hindsight/coding-agents/` 整目录不存在（实测
+`os.path.isdir` 为假），7 条 hindsight 脚本全部不在位。两根 settings.json 里那 6 条注册仍然挂着，
+指向不存在的文件，所以每个会话这三个事件都会起 node 打空。
+现读计数：`~/.workbuddy/settings.json` hooks = 3 事件 / 5 条命令（含本工程挂载的第 3 条），
+`~/.codebuddy/settings.json` = 3 事件 / 3 条命令。检测脚本的判据同步改掉：
+写死的 8 条路径换成「本工程 1 条 + 扫注册表查悬空」，理由与验收写在 AUDIT 的 W12 条目。
+
+
 ## 2. 变更检测清单（下次会话开始逐一核对）
 
 | # | 文件路径 | 必须核对的字段 | 基线期望值（2026-11-06 实算） | 判定为「有变更」 |
@@ -83,7 +92,7 @@ backups.workbuddy=2  backups.codebuddy=2
 | 7 | `marketplaces/` 一级目录集合 | 目录名集合 | 7 个（含 `plugin-data`） | 新增/删除目录；或 `plugin-data` 突然出现清单 |
 | 8 | `my-experts/plugins/neko-plugin-ops/.codebuddy-plugin/plugin.json` | `version`、`agents[]`、`teamInfo`、`expertType` | **v1.6.0**，1 lead + 11 members | 指纹 `2689e205c4d0` 不等 |
 | 9 | `~/.workbuddy/skills/` 一级目录集合 | 目录名集合 | 69 个 | 数量或清单指纹 `2e24b30b2315` 变化（明细由 neko-skill-ops 维护） |
-| 10 | 8 个 hook 脚本路径 | 文件存在性 | 8/8 存在 | 任一缺失 → 启动就绪风险，须报警 |
+| 10 | 本工程自己的 hook 脚本 1 条 + 两根 settings.json 的注册 | 存在性与「注册指向的文件在不在」 | 就绪 1/1，注册无悬空 | 注册悬空 → 每次会话起进程打空，须报警（2026-11-18 实测 6 条，见工单 W12） |
 | 11 | 连接器运行时状态 | `list_installed_plugins` 的 `status/bound/enabled` | 4 个 connected/bound:true/enabled:true | **只读 hook 无法覆盖**（SessionStart 时 MCP 尚不可用）；须在会话内 MCP 就绪后显式调用补齐，标 [FACT/RUNTIME] |
 | 12 | 远程版本 / 云端目录 | `@latest`、npm 包、marketplace 云端新增、官方文档修订、第三方 skill/MCP 上游更新、`packages/*.zip` 一致性 | 不设基线值 | **一律标 [未联网核验]**，禁止断言「已更新」；需用户确认后联网核验 |
 
