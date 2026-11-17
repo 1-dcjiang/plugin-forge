@@ -473,7 +473,7 @@ def check(anchors, head, get=None, get_raw=None, cache_dir=None):
     get / get_raw / cache_dir 透传给 upstream_lines，自检因此能离线跑满 check 的判据本身
     （2026-11-17：以前自检只测 _all_blank 这个纯函数，接线断了也照样绿）。
     """
-    file_cache, rows = {}, []
+    file_cache, blob_cache, rows = {}, {}, []
     for an in anchors:
         path = an["path"]
         if path not in file_cache:
@@ -513,6 +513,10 @@ def check(anchors, head, get=None, get_raw=None, cache_dir=None):
                              detail="这句话只有路径与行号，没有可比对的符号。上游怎么改都验不出来，"
                                     "请在 profile 里补一个符号名（函数、字段或类）"))
             continue
+        # 整份文件的原文拼一次，判「配上的词是不是真符号」要用
+        if path not in blob_cache:
+            blob_cache[path] = NL.join(lines)
+        blob = blob_cache[path]
         drift, present = [], []
         for n in an["nums"]:
             if n > len(lines):
@@ -539,7 +543,12 @@ def check(anchors, head, get=None, get_raw=None, cache_dir=None):
                 # 只加不减：散文里紧邻的词未必是作者指的符号（`docstring`、`oauth` 这类），
                 # 拿它单独判会报一片假漂移；但它非空就把被 6 个上限挤掉的第 7 个符号请回来。
                 paired = (an.get("pairs") or {}).get(n)
-                cand = an["tokens"] + ([paired] if paired else [])
+                # 配上的词要同时满足两条才算「这一号的符号」：在文件里真出现过、
+                # 且以定义形状出现。散文里挨着数字的普通词（docstring、grep、rollback）
+                # 两条都不满足，退回整条 tokens；而「两个号互换」这种真错误两条都满足，跑不掉。
+                hard = (bool(paired) and bool(where_symbol(lines, paired))
+                        and bool(_definition_pattern(paired).search(blob)))
+                cand = [paired] if hard else an["tokens"]
                 if any(t in win for t in cand):
                     continue
                 if any(enclosing(lines, t, n) for t in cand):
@@ -548,8 +557,9 @@ def check(anchors, head, get=None, get_raw=None, cache_dir=None):
                 for t in cand[:3]:
                     w = where_symbol(lines, t)
                     moved.append("%s→%s" % (t, "/".join(map(str, w)) if w else "未找到"))
-                drift.append("%d 行上没有本锚点的标识符，也不在其定义体内；%s"
-                             % (n, ", ".join(moved)))
+                tag = "本锚点为这一号配上的符号" if hard else "本锚点的标识符"
+                drift.append("%d 行上没有%s，也不在其定义体内；%s"
+                             % (n, tag, ", ".join(moved)))
         rows.append(dict(an, status="drift" if drift else "ok", detail="; ".join(drift)))
     return rows
 
@@ -776,6 +786,32 @@ def self_test():
             doc_b64 = base64.b64encode(doc_src.encode("utf-8")).decode("ascii")
             doc_an = {"path": "plugin/a.py", "line": 1, "nums": [1],
                       "tokens": ["handler"], "weak": False, "pairs": {1: "docstring"}}
+            swap_src = ("def timer_interval():" + NL + "    pass" + NL + NL
+                        + "def lifecycle():" + NL + "    pass" + NL)
+            swap_b64 = base64.b64encode(swap_src.encode("utf-8")).decode("ascii")
+            swap_an = {"path": "plugin/a.py", "line": 1, "nums": [1, 4],
+                       "tokens": ["timer_interval", "lifecycle"], "weak": False,
+                       "pairs": {1: "lifecycle", 4: "timer_interval"}}
+            swap_rc = check([swap_an], "ee33ee33ee33",
+                            get=lambda u: ({"content": swap_b64}, None),
+                            cache_dir=tempfile.mkdtemp(prefix="drift-swap-"))[0]
+            cases.append((swap_rc["status"], "drift"))
+            # 真符号配对：各号命中自己的符号，必须通过
+            good_an = {"path": "plugin/a.py", "line": 1, "nums": [1, 4],
+                       "tokens": ["timer_interval", "lifecycle"], "weak": False,
+                       "pairs": {1: "timer_interval", 4: "lifecycle"}}
+            cases.append((check([good_an], "ee44ee44ee44",
+                                get=lambda u: ({"content": swap_b64}, None),
+                                cache_dir=tempfile.mkdtemp(prefix="drift-good-"))[0]["status"],
+                         "ok"))
+            # 配上的词在文件里不是定义（散文词）→ 退回 tokens，不许误杀
+            prose_an = {"path": "plugin/a.py", "line": 1, "nums": [1],
+                        "tokens": ["timer_interval"], "weak": False,
+                        "pairs": {1: "docstring"}}
+            cases.append((check([prose_an], "ee55ee55ee55",
+                                get=lambda u: ({"content": swap_b64}, None),
+                                cache_dir=tempfile.mkdtemp(prefix="drift-prose-"))[0]["status"],
+                         "ok"))
             cases.append((check([doc_an], "ee22ee22ee22",
                                 get=lambda u: ({"content": doc_b64}, None),
                                 cache_dir=tempfile.mkdtemp(prefix="drift-doc-"))[0]["status"],
