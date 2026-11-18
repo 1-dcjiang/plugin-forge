@@ -668,6 +668,10 @@ skill_package.py 是第三方 skill 包静态检测器：规则正则字面量�
 
 单一来源 = 本仓 `skills/plugin-forge/scripts/skill_package.py`；skill_compat 逐字副本 vendored，**副本不手改、只改上游**。skill_compat 侧 `VENDORED.md` 记录来源 commit，`scripts/check_vendored.py` 比对 sha256 防漂移。forge-declared 行随副本带到 skill_compat 属注释噪音（该侧不跑 forge 自扫），接受。
 
+- **同步时须核对 `_resolve_safe_ips` 调用点**：签名已变为 `(host, port, trust_github=False)`，白名单放行改为**显式**传 `trust_github=True` 且仅 HTTPS 生效。旧的两参调用不会报错，只会静默失去 GitHub 白名单放行（加速器用户下载被拒），排查时优先查这里。
+- `_HARD_MAX_ENTRIES` 判定在 `zipfile.infolist()` 之后：`ZipFile()` 打开时已解析中央目录，因此该上限只挡**解压阶段**的条目 inode 炸弹，不挡中央目录本身的内存开销；要挡需先读 EOCD，成本不划算，现状可接受，不视为完整防护。
+
+
 ## 例行复跑（2026-11-14，扫描器扩面后）
 
 - 扫描器本轮三处变更：不再把行截断到 500 字符；无扩展名文件与 `.env*` 进扫描池；被跳过的条目写进 `skips` 清单并在结尾报数。前两条**扩大**发现面，所以旧记录的 100 分与本次不可直接对比。

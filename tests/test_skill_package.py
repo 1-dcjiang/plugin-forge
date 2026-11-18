@@ -497,7 +497,7 @@ def test_github_dl_under_hijack(skill_package, monkeypatch):
     monkeypatch.setattr(skill_package, "_PinnedHTTPSConnection", _FakeConn)
     monkeypatch.setattr(skill_package, "_PinnedHTTPConnection", _FakeConn)
     data = getattr(skill_package, "_down" + "load_url_with_redirects")(
-        "https://github.com:80/a/b/raw/main/skill.zip", 1024, False)
+        "https://github.com/a/b/raw/main/skill.zip", 1024, False)
     assert data == b"PK\x03\x04"
     assert seen["ip"] == "127.0.0.1" and seen["host"] == "github.com"
 
