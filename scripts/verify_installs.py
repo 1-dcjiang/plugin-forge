@@ -46,6 +46,66 @@ def sha12(path):
     return hashlib.sha256(io.open(path, "rb").read()).hexdigest()[:12]
 
 
+TREE_PAIRS = [
+    # (仓库里的 skill 树, 宿主里的同名树)。
+    # 2026-11-18 实测过一次漏检：dry_load.py 进了仓库、进了 CI、进了人设指令，
+    # 但三棵宿主树里都没有它——因为 install_sync 只在有人手动跑它时才对比。
+    # 这里做同样的字节核对，判据不重写：只比 .py 与 .md，忽略宿主独有文件。
+    # (仓库里的 skill 树, 宿主里的相对树名)：宿主清单在 HOSTS 里，两个维度相乘
+    ("skills/plugin-forge", "skills/plugin-forge"),
+    ("skills/neko-plugin-sandbox", "skills/neko-plugin-sandbox"),
+]
+SKIP_NAMES = ("__pycache__", ".git", ".bak")
+
+
+def repo_tree_files(repo_root, rel_root):
+    out = []
+    base = os.path.join(repo_root, rel_root.replace("/", os.sep))
+    if not os.path.isdir(base):
+        return out
+    for dp, dn, fns in os.walk(base):
+        dn[:] = [x for x in dn if x not in ("__pycache__", ".git")]
+        for f in sorted(fns):
+            if f.endswith((".pyc", ".bak")) or ".bak-" in f:
+                continue
+            if not f.endswith((".py", ".md", ".json", ".toml", ".mjs", ".js")):
+                continue
+            out.append(os.path.relpath(os.path.join(dp, f), base).replace("\\", "/"))
+    return out
+
+
+HOSTS = ("~/.claude", "~/.codex", "~/.zcode")
+
+
+def compare_trees(pairs, repo_root=None, hosts=None):
+    """比仓库 skill 树与宿主安装面。返回 (一致数, 问题列表)。"""
+    root = repo_root or REPO
+    ok, problems = 0, []
+    hosts = hosts or [os.path.expanduser(h) for h in HOSTS]
+    for rel_repo, rel_host in pairs:
+        files = repo_tree_files(root, rel_repo)
+        if not files:
+            problems.append(("仓库侧没有这棵树", "-", rel_repo, rel_host))
+            continue
+        for host in hosts:
+            dst_base = os.path.join(os.path.expanduser(host), rel_host.replace("/", os.sep))
+            if not os.path.isdir(dst_base):
+                problems.append(("宿主树整个缺失", "-", rel_repo, dst_base))
+                continue
+            for rel in files:
+                src = os.path.join(root, rel_repo.replace("/", os.sep), rel.replace("/", os.sep))
+                dst = os.path.join(dst_base, rel.replace("/", os.sep))
+                if not os.path.isfile(dst):
+                    problems.append((sha12(src), "缺失", rel_repo + "/" + rel, dst_base + "/" + rel))
+                    continue
+                if sha12(src) == sha12(dst):
+                    ok += 1
+                else:
+                    problems.append((sha12(src), sha12(dst), rel_repo + "/" + rel,
+                                     dst_base + "/" + rel))
+    return ok, problems
+
+
 def compare(pairs, repo_root=None):
     """返回 (一致条数, 问题列表)。问题形如 (仓库 sha, 副本 sha 或 '缺失', 两侧路径)。"""
     root = repo_root or REPO
@@ -93,6 +153,20 @@ def _self_test():
         cases.append(("红的那条要指名副本路径", bool(bad_d) and bad_d[0][3].endswith("f.py"), True))
         ok_m, bad_m = compare([("scripts/f.py", [miss + "/deploy/nope.py"])], repo_root=miss)
         cases.append(("副本缺失也算红", (ok_m, len(bad_m), bad_m[0][1] if bad_m else ""), (0, 1, "缺失")))
+        # 树比对：宿主少一个文件必须报，两边一致必须不报
+        tdir = os.path.join(good, "skills", "x")
+        os.makedirs(os.path.join(tdir, "scripts"), exist_ok=True)
+        io.open(os.path.join(tdir, "scripts", "a.py"), "wb").write(src_body)
+        host_tree = os.path.join(good, "host", "skills", "x", "scripts")
+        os.makedirs(host_tree, exist_ok=True)
+        io.open(os.path.join(host_tree, "a.py"), "wb").write(src_body)
+        pairs_t = [("skills/x", good + "/host/skills/x")]
+        ok_t, bad_t = compare_trees(pairs_t, repo_root=good, hosts=[good + "/host"])
+        cases.append(("树一致时报 0 处问题", (ok_t, len(bad_t)), (1, 0)))
+        os.remove(os.path.join(host_tree, "a.py"))
+        ok_t2, bad_t2 = compare_trees(pairs_t, repo_root=good, hosts=[good + "/host"])
+        cases.append(("宿主少一个文件要报缺失", (ok_t2, len(bad_t2),
+                                                bad_t2[0][1] if bad_t2 else ""), (0, 1, "缺失")))
         ok_n, bad_n = compare([("scripts/gone.py", [good + "/deploy/f.py"])], repo_root=good)
         cases.append(("源文件没了也算红", (ok_n, len(bad_n), bad_n[0][0] if bad_n else ""),
                       (0, 1, "无源文件")))
@@ -114,11 +188,17 @@ def main(argv=None):
     ap = argparse.ArgumentParser(prog="verify_installs.py", description="部署副本与仓库字节一致性检查")
     ap.add_argument("--check", action="store_true", help="比一比（默认行为）")
     ap.add_argument("--json", action="store_true", help="机器可读输出")
+    ap.add_argument("--trees", action="store_true",
+                    help="再比一遍宿主里那两棵 skill 树（比 install_sync 的写面）")
     ap.add_argument("--self-test", action="store_true", help="离线夹具自检")
     a = ap.parse_args(argv)
     if a.self_test:
         return _self_test()
     ok, problems = compare(PAIRS)
+    if a.trees:
+        t_ok, t_problems = compare_trees(TREE_PAIRS)
+        ok += t_ok
+        problems += t_problems
     if a.json:
         print(json.dumps({"consistent": ok, "problems": [list(p) for p in problems]},
                          ensure_ascii=False))

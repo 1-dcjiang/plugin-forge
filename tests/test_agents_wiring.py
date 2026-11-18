@@ -9,7 +9,7 @@ import io
 import os
 import re
 
-BARE = re.compile(r"(?<![\w$/{}-])(references/[\w.\-/]+|scripts/[\w.\-/]+)")
+BARE = re.compile(r"(?<![\w$/{}-])(references/[\w.\-/]+|scripts/[\w.\-/]+|skills/[\w.\-/]+)")
 
 
 def _agent_texts(repo_root):

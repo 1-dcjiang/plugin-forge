@@ -67,7 +67,8 @@ description: 基于 N.E.K.O 官方仓库搭建隔离的插件运行时沙箱：�
 
 ```bash
 D=skills/neko-plugin-sandbox/scripts/dry_load.py
-python $D <插件目录>                                                    # 自动探沙箱 config
+python $D <插件目录>                                                    # 不给 --root：固定降级
+python $D <插件目录> --root <沙箱根>                                    # 从沙箱根探 venv 与 checkout
 python $D <插件目录> --python <venv 的 python> --neko-repo <官方源码目录>      # 显式指定
 python $D --demo-check                                                 # 仓内对照样例（CI 用）
 python $D --self-test                                                  # 自检（CI 用）
@@ -96,7 +97,7 @@ python $D --self-test                                                  # 自检�
 ```bash
 S=skills/neko-plugin-sandbox/scripts/sandbox.py
 
-python skills/neko-plugin-sandbox/scripts/dry_load.py <插件目录>   # 第 0 步：先干装载
+python skills/neko-plugin-sandbox/scripts/dry_load.py <插件目录> --root <ROOT>   # 第 0 步：先干装载
 
 python $S doctor    --root <ROOT>                        # 前置检查
 python $S prepare   --root <ROOT> --repo <已有源码目录>   # 挂载已有 checkout（推荐，免克隆）

@@ -773,14 +773,30 @@ def _posix_cmdline(pid, read_proc, run_ps):
     return out.decode("utf-8", "replace").strip(), True
 
 
-def pid_verdict(cmd):
-    """True = 命令行里有 user_plugin_server.py；False = 确认不是；None = 读不到，未知。
+def norm_path(s):
+    """比较用的路径归一化：反斜杠换正斜杠，再统一小写。
+
+    Windows 的命令行里两种分隔符混着写，比字符串时不能按原样比。
+    """
+    return str(s).replace(chr(92), "/").lower()
+
+
+def pid_verdict(cmd, repo=None):
+    """True = 命令行里有**沙箱自己的** user_plugin_server.py；False = 确认不是；None = 读不到。
 
     机器重启后 pid 会被复用，只看 sandbox.json 的 pid 会误杀无关进程。
+    光认脚本名还不够：用户本机真跑的 N.E.K.O 也是同一个脚本名，pid 复用时会把用户的
+    真服务当沙箱进程杀掉（外部审 A791 第 2 组，本会话实测坐实）。
+    登记里有 repo 路径时，命令行必须同时含该路径。老登记没有 repo 字段才退回只认脚本名，
+    并在调用处由状态文件补齐——退回是有条件的，不是默认放宽。
     """
     if not cmd:
         return None
-    return "user_plugin_server.py" in cmd
+    if "user_plugin_server.py" not in cmd:
+        return False
+    if repo:
+        return norm_path(str(repo)) in norm_path(cmd)
+    return True
 
 
 def stop_action(verdict, alive, force):
@@ -972,7 +988,7 @@ def cmd_stop(args):
     if pid <= 0:
         die("状态文件里的 pid 不合法（%d）。先核对端口归属，再手工删 %s" % (pid, STATE_FILE))
     cmd, alive = _pid_cmdline(pid)
-    verdict = pid_verdict(cmd)
+    verdict = pid_verdict(cmd, st.get("repo"))
     action = stop_action(verdict, alive, args.force)
     if action == "refuse":
         die("读不到 pid=%s 的命令行（PowerShell 缺失、被挡、超时），而该进程还在，"
@@ -1318,11 +1334,20 @@ def _self_test():
             bad.append("stop 判定 verdict=%s alive=%s force=%s 得到 %s 期望 %s"
                        % (verdict, alive, force, got, want))
     # 命令行 → 判定：读不到是 None（要 --force 或按 gone 处理），身份不符才是 False
-    verdict_cases = ((None, None), ("", None),
-                     ("/usr/bin/python3 /srv/user_plugin_server.py", True),
-                     ("C:" + chr(92) + "Windows" + chr(92) + "explorer.exe", False))
-    for cmd, want in verdict_cases:
-        got = pid_verdict(cmd)
+    SANDBOX_REPO = "/srv/sandbox/repo"
+    verdict_cases = (
+        (None, None, None), ("", None, None),
+        ("/usr/bin/python3 /srv/user_plugin_server.py", None, True),
+        ("C:" + chr(92) + "Windows" + chr(92) + "explorer.exe", None, False),
+        # 关键一条：用户本机真 N.E.K.O 的同名服务，repo 不符就是 False
+        ("/usr/bin/python3 /opt/neko/plugin/user_plugin_server.py", SANDBOX_REPO, False),
+        # 沙箱自己的那条才算 True
+        (SANDBOX_REPO + "/plugin/user_plugin_server.py --port 43117", SANDBOX_REPO, True),
+        # 老登记没有 repo 字段时退回只认脚本名，但仍是沙箱自己的路径
+        ("/srv/user_plugin_server.py", "", True),
+    )
+    for cmd, repo_of_case, want in verdict_cases:
+        got = pid_verdict(cmd, repo_of_case)
         if got is not want:
             bad.append("pid_verdict(%r) 得到 %s 期望 %s" % (cmd, got, want))
     # 2026-11-16 补（A571 第 2 条）：POSIX 分支的平台形状。macOS 没有 /proc，旧版只读 /proc，

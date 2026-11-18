@@ -62,6 +62,7 @@ metadata:
 ## 2. 四条铁律（范式核心机制）
 
 1. **契约前置**：Workflow A 的契约审议不可跳步。没有契约审议师准奏，不许动手写码。准奏须落盘项目根 `contract-approval.json`（格式 `references/contract-approval.schema.json`，示例见 `.example.json`）；写码前跑 `python ${FORGE_HOME}/scripts/check_contract_approval.py --approval <项目根>/contract-approval.json <要写的文件…>`，脚本 REFUSE 即不许动笔。
+    这台门禁**只验形状不执行**：`verify_commands` 每条要解析得到、引用的文件真在工作区、程序名能在 PATH 上找到；它不会替你跑一遍（跑就是执行别人的代码）。所以「准奏里写了验收命令」不等于「测过了」，交付证据仍要按 §6 贴原生输出。
 2. **封驳必须给改法**：只否定不给路径算失职；连续 2 次封驳升级用户裁决。
 3. **先搜后建**：写任何新代码前先过 rbb 门禁。三轮检索后必须给判决，四档取一：加入上游（Join）/ 做官方扩展（Extend）/ 分叉并保持同步（Fork）/ 自建（Build，附**不可复用的具体理由**）。判定先过可改性硬闸：绿才 Join，黄只 Extend，红禁止 Join。小改动（走精简流或 Workflow B）由 lead 派 market-research 跑 rbb 快速档：3 条检索串加三行 Reused / Change / Risk，但「有没有人做过」这一问不豁免。纯改文案与文档不算写代码，不触发 1a。断网或仓库读不到时不豁免，改成交检索串清单并标「未核验」。判决为 Join / Fork 时，对外发 issue 或 PR 每次单独确认。权威本体是上游插件 `reuse_before_build`（1-dcjiang，MIT，v0.3.20 / 8388e27，2026-11-16 核对），本团只引用不内嵌。详见 `references/workflows.md` 的 Workflow A 第 1a 步。
 4. **分拣**：纯问答（"X 是什么""怎么装"）主理人直接答，不开团队流程。
@@ -111,6 +112,7 @@ metadata:
   `codex/prompts/plugin-forge.md` 第 4 步与第 8 步（准奏落盘 + `check_contract_approval.py`，
   安全分诊 `security_audit.py`）。
 - 路径约定：`${FORGE_HOME}` = **装着 `scripts/check_contract_approval.py` 的那个 plugin-forge 目录**，也就是 skill 目录，不是仓库根、也不是插件包的根。Claude Code 从市场安装时，插件根下面还有一层 `skills/plugin-forge/`，指错一层就找不到脚本（仓库根的 `scripts/` 里只有探针与花名册工具）。执行命令前先自检一句：`test -f "$FORGE_HOME/scripts/check_contract_approval.py" && echo 对`。zcode 为 `~/.zcode/skills/plugin-forge`，Codex 为 `~/.codex/skills/plugin-forge`。它是文档占位符，执行命令前先换成实际目录（或 `export FORGE_HOME=…`）；文档内不再写死宿主路径。
+- 第二个占位符 `${SANDBOX_HOME}` = **隔壁那棵 `neko-plugin-sandbox` skill 目录**，`dry_load.py` 与 `sandbox.py` 在那里，不在 `${FORGE_HOME}` 下面。两棵树由安装器分别安装；旧写法把路径写成 `${FORGE_HOME}/../neko-plugin-sandbox/…`，装出来是一条带 `..` 的路径，读的人要先心算一层（2026-11-18 实测）。执行前同样自检一句：`test -f "$SANDBOX_HOME/scripts/dry_load.py" && echo 对`。
 - 版本号只认 `.claude-plugin/plugin.json` 的 `version`（插件发布号）。本文件与 `agents/*.md` 不带版本号，避免两处漂移。
 
 ## 6. 交付前终检（闸门快照）

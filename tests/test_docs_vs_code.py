@@ -64,4 +64,6 @@ def test_刷新脚本不许声称自检不读用户目录(repo_root):
     src = _read(repo_root, "scripts/session_capability_refresh.py")
     assert "不读用户目录" not in src, \
         "这句口径与实测行为相反：自检确实会只读用户目录里的配置"
-    assert "只读" in src and "open()" in src, "口径要写清读到什么、用什么测出来的"
+    # 断言要指着具体句子，不能只查两个常见词是否出现（那种断言几乎恒真）
+    assert "settings.json" in src and "mcp.json" in src,         "口径要点名到底读哪几个文件，光写「只读」没有信息量"
+    assert "open()" in src, "口径要写明这条是用什么测出来的"
