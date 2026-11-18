@@ -56,22 +56,42 @@ def toml_section_value(text, section, key):
     cur = None
     for raw in text.replace("\r\n", "\n").split("\n"):
         line = raw.strip()
-        if line.startswith("[") and line.endswith("]"):
-            cur = line[1:-1].strip()
+        # 段头可以带行尾注释（[plugin]  # 说明）。先剥注释再判，与
+        # security_audit.plugin_toml_keys 同口径：两处判据不一致时会出假红。
+        # 只对以 [ 开头的行剥注释，值行（key = "a#b"）不进这个分支，行为不变。
+        head = line.split("#")[0].strip() if line.startswith("[") else line
+        if head.startswith("[") and head.endswith("]"):
+            cur = head[1:-1].strip()
             continue
         if cur != section or "=" not in line:
             continue
         k, _, v = line.partition("=")
         if k.strip() != key:
             continue
-        v = v.split("#")[0].strip()
+        # 只在引号外面剥行尾注释。TOML 里 `id = "a#b"` 的 # 属于值，
+        # 无条件 split("#") 会把它截成 "a"，与上游 tomllib 的读法不一致（自检抓到过一次）。
+        v = v.strip()
+        inq, cut = "", None
+        for idx, ch in enumerate(v):
+            if inq:
+                if ch == inq:
+                    inq = ""
+            elif ch in "\"'":
+                inq = ch
+            elif ch == "#":
+                cut = idx
+                break
+        if cut is not None:
+            v = v[:cut].strip()
         return v.strip('"').strip("'") if v else None
     return None
 
 
 def toml_has_section(text, section):
-    pat = "\n[%s]" % section
-    return pat in text.replace("\r\n", "\n")
+    # 缩进的段头与带行尾注释的段头都要认到，与 toml_section_value 同一口径（A791 第 3 条）。
+    # 旧写法是子串匹配，缩进行与首行段头都漏；行首锚定后也不再误命中值串里的同名文本。
+    pat = r"(?m)^[ \t]*\[%s\][ \t]*(#.*)?$" % re.escape(section)
+    return bool(re.search(pat, text.replace("\r\n", "\n")))
 
 
 def plugin_package_matches_directory(package, directory_name):
@@ -250,16 +270,28 @@ def check_source(pkg_dir, entry):
 def _isolated_env(root_tmp):
     """真装载子进程的环境：数据根指到临时目录，宿主凭据不进子进程。"""
     env = os.environ.copy()
-    for key in ("HOME", "USERPROFILE", "LOCALAPPDATA", "APPDATA", "TEMP", "TMP",
-                "NEKO_PLUGIN_HOSTED_BY_AGENT"):
+    for key in ("HOME", "USERPROFILE", "LOCALAPPDATA", "APPDATA", "TEMP", "TMP"):
         env[key] = os.path.join(root_tmp, key.lower())
+    # 上游已无读取点，留一个路径值只会注入假的「嵌入式」身份。与 sandbox.py 同口径，清掉。
+    env.pop("NEKO_PLUGIN_HOSTED_BY_AGENT", None)
     try:
         sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
         from sandbox import env_is_secret          # 同一份判据，不在这里重写
         for k in [k for k, v in env.items() if env_is_secret(k, v)]:
             env.pop(k, None)
-    except Exception:
-        pass
+    except Exception as e:
+        # 判据来自 sandbox.py。拿不到它就是 fail-open：子进程继承宿主全部环境。
+        # 静默跳过等于没提示，这里必须出声（工单 A791 第 1 条）。
+        # 出声之前先把 stderr 转 UTF-8：main() 里那句 reconfigure 在这条路上没跑过
+        # （模块被 import 后直接调本函数时），Windows 上默认是本机代码页 GBK，
+        # 上层按 UTF-8 解出来是乱码，等于警告丢了（反证 34 实测）。
+        try:
+            sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+        print("dry_load 警告：拿不到 sandbox.env_is_secret，凭据过滤已跳过（%s）。"
+              "子进程会继承宿主环境变量。请把 sandbox.py 和 dry_load.py 一起拉取。"
+              % type(e).__name__, file=sys.stderr)
     for sub in ("home", "localappdata", "appdata", "temp", "tmp"):
         try:
             os.makedirs(os.path.join(root_tmp, sub), exist_ok=True)
@@ -325,6 +357,11 @@ def real_load(pkg_dir, repo_root, py, info):
             if r.returncode == 0:      # 有一档装得进就用那一档的结果，别把成功读成两份
                 break
         out = outs[-1]
+    except subprocess.TimeoutExpired:
+        # 超时不是「环境缺」而是「插件 import 期卡住」。宿主装载会卡在同一个地方，
+        # 所以单独算失败，不许降级成「真装载没问题」（工单 A791 第 2 条）。
+        # TimeoutExpired 必须排在 SubprocessError 前面，它是那个类的子类。
+        return "ok", ["真装载超时：子进程 180 秒内没返回，插件 import 期可能死循环或长阻塞"], ""
     except (OSError, subprocess.SubprocessError) as e:
         return "env", ["子进程没跑起来：%s（%s）" % (type(e).__name__, str(e)[:80])], ""
     finally:
@@ -423,9 +460,15 @@ def _print(report, code):
         print("真装载输出尾巴：%s" % report["real_load_output"][-300:])
     for p in report.get("problems", []):
         print("  [问题] %s" % p)
-    print("结论：%s" % ("通过" if code == 0 else
-                       ("发现问题 %d 处" % len(report.get("problems", [])) if code == 1 else
-                        "用法或环境错误")))
+    if code == 0:
+        # 键取 mode，不取 degrade_reason：没沙箱的常规降级没有 degrade_reason，
+        # 也不能汇报成「通过」（模块 docstring 第 26 行早就承诺会明写）。
+        verdict = "通过" if report.get("mode") == "real-import" else "降级通过"
+    elif code == 1:
+        verdict = "发现问题 %d 处" % len(report.get("problems", []))
+    else:
+        verdict = "用法或环境错误"
+    print("结论：%s" % verdict)
 
 
 def _self_test():
@@ -455,6 +498,21 @@ def _self_test():
     # 默认夹具用上游真能装的包写法：入口类放在插件目录的 __init__.py 里。
     # 上一版用 main:DemoPlugin，那是宿主两种模式都装不进的写法（见 check_manifest 那条），
     # 夹具跟着判据改，不然「好例子」只在降级腿下才是好的。
+    # A791 第 1/3 条各钉一条：段头带注释、缩进段头、值行里的 # 不算注释
+    hdr_id = toml_section_value("[plugin]" + chr(32) + " # 说明" + chr(10)
+                                + 'id = "demo_plugin"' + chr(10), "plugin", "id")
+    n += 1
+    if hdr_id != "demo_plugin":
+        bad.append("段头带行尾注释时没认到 id，实得 %r" % (hdr_id,))
+    n += 1
+    if not toml_has_section(chr(10) + "  [plugin.host]" + chr(32) + " # c" + chr(10),
+                            "plugin.host"):
+        bad.append("缩进且带注释的段头没认到（toml_has_section）")
+    n += 1
+    val_hash = toml_section_value("[plugin]" + chr(10) + 'id = "a#b"' + chr(10),
+                                  "plugin", "id")
+    if val_hash != "a#b":
+        bad.append("值行里的 # 被当注释剥掉了，实得 %r" % (val_hash,))
     cases = [
         ("好例子（降级模式）", dict(toml=good_toml, files={"__init__.py": good_src}), 0),
         ("目录名不等于 id", dict(name="other_dir", toml=good_toml, files={"__init__.py": good_src}), 1),
@@ -543,6 +601,15 @@ def _self_test():
     n += 1
     if rep.get("mode") != "ast-fallback":
         bad.append("没有沙箱时模式应是 ast-fallback，实得 %s" % rep.get("mode"))
+    # A791 第 2 条：降级时结论行必须写「降级通过」，不许写「通过」。
+    # 键取 mode，不取 degrade_reason：没沙箱的常规降级没有 degrade_reason，也一样不许冒充真装载过。
+    buf = io.StringIO()
+    import contextlib
+    with contextlib.redirect_stdout(buf):
+        _print(rep, 0)
+    n += 1
+    if "降级通过" not in buf.getvalue():
+        bad.append("降级模式的结论行仍写「通过」，实得 %r" % (buf.getvalue()[-90:],))
     # 真装载那条腿：造一个假 SDK 包与一个入口能 import 的插件，用当前解释器跑
     fake = tempfile.mkdtemp(prefix="dryload-real-")
     try:
@@ -696,6 +763,9 @@ def _demo_check(as_json=False):
 def main(argv=None):
     try:
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        # stderr 也要转。fail-open 的警告就印在 stderr：Windows 上子进程默认用本机代码页（GBK），
+        # 上层按 UTF-8 解码会整段丢掉，看起来就像「警告没出声」（反证 34 实测踩过）。
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
     except Exception:
         pass
     if "--self-test" in (argv or sys.argv[1:]):
