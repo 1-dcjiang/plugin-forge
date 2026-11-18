@@ -200,7 +200,7 @@ def test_redirect_to_private_rejected(skill_package, monkeypatch):
     monkeypatch.setattr(skill_package, "_PinnedHTTPConnection", _FakeConn)
     # 首跳给公网 IP；第二跳（127.0.0.1，端口已允许）走真实解析校验并应被拒
     monkeypatch.setattr(skill_package, "_resolve_safe_ips",
-                        lambda h, p: ["8.8.8.8"] if h == "public.example" else ["127.0.0.1"])
+                        lambda h, p, trust_github=False: ["8.8.8.8"] if h == "public.example" else ["127.0.0.1"])
     with pytest.raises(ValueError, match="已拒绝"):
         getattr(skill_package, "_down" + "load_url_with_redirects")(first, 1024, False)  # forge-declared: SEC-4 理由=skill_package 为安全检测器规则字典/其攻击样本测试，非真实执行；下载为 SSRF 逐跳+超限确认的受控下载 出处=AUDIT.md#sec-declared 复审=2026-12-18
     assert dials == ["8.8.8.8"]  # 只拨了首跳，私网重定向未拨号
@@ -230,7 +230,7 @@ def test_gzip_decoded(skill_package, monkeypatch):
     t = threading.Thread(target=srv.serve_forever, daemon=True)
     t.start()
     monkeypatch.setattr(skill_package, "_url_safe", lambda u: True)
-    monkeypatch.setattr(skill_package, "_resolve_safe_ips", lambda h, p: ["127.0.0.1"])
+    monkeypatch.setattr(skill_package, "_resolve_safe_ips", lambda h, p, trust_github=False: ["127.0.0.1"])
     try:
         assert getattr(skill_package, "_down" + "load_url_with_redirects")(f"http://localhost:{srv.server_port}/s.zip", 1024, False) == body  # forge-declared: SEC-4 理由=skill_package 为安全检测器规则字典/其攻击样本测试，非真实执行；下载为 SSRF 逐跳+超限确认的受控下载 出处=AUDIT.md#sec-declared 复审=2026-12-18
     finally:
@@ -389,7 +389,7 @@ def test_https_downgrade_rejected(skill_package, monkeypatch):
             pass
 
     monkeypatch.setattr(skill_package, "_PinnedHTTPSConnection", _FakeConn)
-    monkeypatch.setattr(skill_package, "_resolve_safe_ips", lambda h, p: ["8.8.8.8"])
+    monkeypatch.setattr(skill_package, "_resolve_safe_ips", lambda h, p, trust_github=False: ["8.8.8.8"])
     with pytest.raises(ValueError, match="降级"):
         getattr(skill_package, "_down" + "load_url_with_redirects")("https://public.example/a.zip", 1024, False)
 
@@ -453,7 +453,9 @@ def test_github_dl_under_hijack(skill_package, monkeypatch):
     monkeypatch.setattr(_sock, "getaddrinfo",
                         lambda *a, **k: [(_sock.AF_INET, _sock.SOCK_STREAM, 6, "", ("127.0.0.1", 80))])
     # 白名单域跳过 IP 判定；非白名单域仍拒
-    assert skill_package._resolve_safe_ips("github.com", 443) == ["127.0.0.1"]
+    assert skill_package._resolve_safe_ips("github.com", 443, trust_github=True) == ["127.0.0.1"]
+    with pytest.raises(ValueError, match="已拒绝"):
+        skill_package._resolve_safe_ips("github.com", 80)  # HTTP 无证书兜底，不跳过 IP 判定
     with pytest.raises(ValueError, match="已拒绝"):
         skill_package._resolve_safe_ips("example.com", 443)
 
@@ -492,9 +494,10 @@ def test_github_dl_under_hijack(skill_package, monkeypatch):
             pass
 
     monkeypatch.setattr(skill_package, "_url_safe", lambda u: True)
+    monkeypatch.setattr(skill_package, "_PinnedHTTPSConnection", _FakeConn)
     monkeypatch.setattr(skill_package, "_PinnedHTTPConnection", _FakeConn)
     data = getattr(skill_package, "_down" + "load_url_with_redirects")(
-        "http://github.com:80/a/b/raw/main/skill.zip", 1024, False)
+        "https://github.com:80/a/b/raw/main/skill.zip", 1024, False)
     assert data == b"PK\x03\x04"
     assert seen["ip"] == "127.0.0.1" and seen["host"] == "github.com"
 
@@ -558,7 +561,7 @@ def test_multi_ip_fallback(skill_package, monkeypatch):
             pass
 
     monkeypatch.setattr(skill_package, "_url_safe", lambda u: True)
-    monkeypatch.setattr(skill_package, "_resolve_safe_ips", lambda h, p: ["8.8.8.8", "2606:4700::1111"])
+    monkeypatch.setattr(skill_package, "_resolve_safe_ips", lambda h, p, trust_github=False: ["8.8.8.8", "2606:4700::1111"])
     monkeypatch.setattr(skill_package, "_PinnedHTTPConnection", _FailThenOK)
     assert getattr(skill_package, "_down" + "load_url_with_redirects")("http://public.example/x.zip", 1024, False) == b"PK\x03\x04"
 
@@ -597,7 +600,7 @@ def test_dl_deadline(skill_package, monkeypatch):
     monkeypatch.setattr(skill_package, "_DL_DEADLINE_S", 10)
     monkeypatch.setattr(skill_package.time, "monotonic", lambda: next(ticks, 100.0))
     monkeypatch.setattr(skill_package, "_url_safe", lambda u: True)
-    monkeypatch.setattr(skill_package, "_resolve_safe_ips", lambda h, p: ["8.8.8.8"])
+    monkeypatch.setattr(skill_package, "_resolve_safe_ips", lambda h, p, trust_github=False: ["8.8.8.8"])
     monkeypatch.setattr(skill_package, "_PinnedHTTPConnection", _FakeConn)
     with pytest.raises(ValueError, match="超时"):
         getattr(skill_package, "_down" + "load_url_with_redirects")("http://public.example/x.zip", 1024, False)
@@ -658,3 +661,44 @@ def test_audit_dir_symlink_reported(skill_package, tmp_path):
     issues = skill_package.audit_skill_dir(
         {"path": str(d), "name": "ok", "dirname": d.name, "kind": "local"})
     assert any(i["rule"] == "symlink_skipped" for i in issues["issues"])
+
+
+def test_frontmatter_block_scalar_indented_delimiter(skill_package):
+    """块标量里缩进的 --- 是内容，不能提前关闭 frontmatter。"""
+    fm = skill_package.parse_frontmatter(
+        "---\ndescription: |-\n  ---\n  detail\nname: x\n---\nbody")
+    assert fm["description"] == "---\ndetail"
+    assert fm["name"] == "x"
+
+
+def test_audit_walk_and_getsize_errors(skill_package, tmp_path, monkeypatch):
+    """枚举失败/大小读取失败都必须报 issue，不得静默返回 safe。"""
+    d = tmp_path / "p"
+    d.mkdir()
+    (d / "SKILL.md").write_text("---\nname: ok\n---\n", encoding="utf-8")
+    (d / "run.py").write_text("print(1)\n", encoding="utf-8")
+
+    def fake_walk(top, onerror=None):
+        onerror(OSError("cannot list"))
+        yield top, [], []
+
+    real_walk = os.walk
+    monkeypatch.setattr(skill_package.os, "walk", fake_walk)
+    issues = skill_package.audit_skill_dir(
+        {"path": str(d), "name": "ok", "dirname": d.name, "kind": "local"})
+    assert any(i["rule"] == "walk_error" for i in issues["issues"])
+
+    monkeypatch.setattr(skill_package.os, "walk", real_walk)
+    monkeypatch.setattr(skill_package.os.path, "getsize", lambda p: (_ for _ in ()).throw(OSError("x")))
+    issues = skill_package.audit_skill_dir(
+        {"path": str(d), "name": "ok", "dirname": d.name, "kind": "local"})
+    assert any(i["rule"] == "size_read_error" for i in issues["issues"])
+
+
+def test_zip_entry_hard_cap_after_confirm(skill_package, tmp_path, monkeypatch):
+    """confirm_large=True 仍受条目数硬上限，防空条目 inode 炸弹。"""
+    entries = [(f"f{i}.txt", b"") for i in range(20)]
+    zp = _zip(tmp_path, "big.zip", entries)
+    monkeypatch.setattr(skill_package, "_HARD_MAX_ENTRIES", 5)
+    with pytest.raises(ValueError, match="硬上限"):
+        skill_package.stage_zip(str(zp), confirm_large=True)

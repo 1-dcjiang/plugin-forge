@@ -662,7 +662,7 @@ skill_package.py 是第三方 skill 包静态检测器：规则正则字面量�
 | 网络下载/外联 | download_exec=critical / net_in_script=medium | SEC-4 | 同上，各报各的 |
 | 读敏感文件/真凭据 | read_secret_file=high（路径形态） | SEC-2 一票否决 | 本仓真凭据以 SEC-2 为准 |
 
-已知缺口（不阻塞合并，**文档不暗示可防绕过**）：import 别名、getattr 拼名、compile、b64→exec、`__subclasses__` 等整串正则不命中。已用 `xfail(strict=True)` 记录（test_bypass_import_alias / test_bypass_getattr）；后续以标准库 ast 做 .py 预检落地后自动转绿、提示去标记。
+已知缺口（不阻塞合并，**文档不暗示可防绕过**）：import 别名、getattr 拼名、compile、b64→exec、`__subclasses__` 等整串正则不命中。已用 `xfail(strict=True)` 记录（test_bypass_import_alias / test_bypass_getattr）；后续以标准库 ast 做 .py 预检落地后自动转绿、提示去标记。Node 侧 `shell.exec('...')` 与 `cp['exec']('...')` 也不命中：删除 `js_member_exec` 后，前者仅 `cmd_hint=low`，后者完全不报（`node_exec` 只覆盖 `cp.exec` / `child_process.exec` / `execSync` / `execFileSync` 形态）；接受该权衡以避免 `regex.exec(s)` 误报，后续可用 AST/白名单成员名收敛。
 
 ### vendored 同步（skill_compat 副本）
 
