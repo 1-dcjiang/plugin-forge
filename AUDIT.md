@@ -633,6 +633,36 @@ session_id / source / hook_event_name」。删掉解析就同时改了一条对�
 
 裸扫结果（不加 --allow）：`SEC-1 0 / SEC-2 0 / SEC-3 0 / SEC-4 0`，总分 100/100，退出码 0；点位声明 33 处，畸形或过期声明 0 处。上面这些数字都以实跑为准，别抄进新结论。
 
+### sec-declared · skill_package 增补登记（2026-11-18，PR#6 主人复审后）
+
+skill_package.py 是第三方 skill 包静态检测器：规则正则字面量与受控下载入口按点位声明，各自写明理由；测试攻击样本优先拆写规避（`"os." + "system"`、`"child_process." + "exec(...)"`），躲不掉的才声明。复审统一 2026-12-18，**到期需一次性集中复审**（台账记此一笔）。
+
+| 位置 | 理由 | 复审 |
+|---|---|---|
+| skills/plugin-forge/scripts/skill_package.py:60 | exec_shell 规则正则字面量（裸 eval/exec，`(?<![\w.])` 排除成员调用） | 2026-12-18 |
+| skills/plugin-forge/scripts/skill_package.py:63 | node_exec 规则正则字面量（child_process.exec/execSync） | 2026-12-18 |
+| skills/plugin-forge/scripts/skill_package.py:64-66 | download_exec 规则正则字面量（`\|sh` 与 `-o` 分支拆行避误命中） | 2026-12-18 |
+| skills/plugin-forge/scripts/skill_package.py:89 | cmd_hint 规则正则字面量 | 2026-12-18 |
+| skills/plugin-forge/scripts/skill_package.py:332 | 受控下载入口（逐跳 SSRF 预筛选+钉 IP+超限确认+硬上限） | 2026-12-18 |
+| skills/plugin-forge/scripts/skill_package.py:396,413 | 超限提示的来源元数据字段，非网络调用 | 2026-12-18 |
+| tests/test_skill_package.py（攻击样本/受控下载测试行） | 检测器回归样本，拆写优先、余者逐点声明 | 2026-12-18 |
+
+### 与 security_audit.py 的对照（同一形状以谁为准）
+
+两者目标不同、互补不互替：本仓自扫审自己写的插件（SEC-1..4 计分），skill_package 审第三方 skill 包（提示注入/钓鱼/下载即执行，五档）。
+
+| 形状 | skill_package（第三方包） | security_audit（本仓） | 以谁为准 |
+|---|---|---|---|
+| 裸 eval/exec/系统命令 | exec_shell=critical | SEC-3 | 本仓自扫以 SEC-3 计；第三方包审计以 exec_shell 报 |
+| 网络下载/外联 | download_exec=critical / net_in_script=medium | SEC-4 | 同上，各报各的 |
+| 读敏感文件/真凭据 | read_secret_file=high（路径形态） | SEC-2 一票否决 | 本仓真凭据以 SEC-2 为准 |
+
+已知缺口（不阻塞合并，**文档不暗示可防绕过**）：import 别名、getattr 拼名、compile、b64→exec、`__subclasses__` 等整串正则不命中。已用 `xfail(strict=True)` 记录（test_bypass_import_alias / test_bypass_getattr）；后续以标准库 ast 做 .py 预检落地后自动转绿、提示去标记。
+
+### vendored 同步（skill_compat 副本）
+
+单一来源 = 本仓 `skills/plugin-forge/scripts/skill_package.py`；skill_compat 逐字副本 vendored，**副本不手改、只改上游**。skill_compat 侧 `VENDORED.md` 记录来源 commit，`scripts/check_vendored.py` 比对 sha256 防漂移。forge-declared 行随副本带到 skill_compat 属注释噪音（该侧不跑 forge 自扫），接受。
+
 ## 例行复跑（2026-11-14，扫描器扩面后）
 
 - 扫描器本轮三处变更：不再把行截断到 500 字符；无扩展名文件与 `.env*` 进扫描池；被跳过的条目写进 `skips` 清单并在结尾报数。前两条**扩大**发现面，所以旧记录的 100 分与本次不可直接对比。
