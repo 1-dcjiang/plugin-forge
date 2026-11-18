@@ -161,9 +161,12 @@ def test_url_safe_github_allow_under_hijack(skill_package, monkeypatch):
     assert skill_package._url_safe("https://github.com.evil.com/x") is False
 
 
-def test_redirect_to_private_rejected(skill_package):
+def test_redirect_to_private_rejected(skill_package, monkeypatch):
+    seen = []
+
     class _R(http.server.BaseHTTPRequestHandler):
         def do_GET(self):
+            seen.append(self.path)
             self.send_response(302)
             self.send_header("Location", "http://127.0.0.1:1/evil.zip")
             self.end_headers()
@@ -174,9 +177,14 @@ def test_redirect_to_private_rejected(skill_package):
     srv = http.server.HTTPServer(("127.0.0.1", 0), _R)
     t = threading.Thread(target=srv.serve_forever, daemon=True)
     t.start()
+    first = f"http://localhost:{srv.server_port}/src.zip"  # forge-declared: SEC-4 理由=skill_package 为安全检测器规则字典/其攻击样本测试，非真实执行；下载为 SSRF 逐跳+超限确认的受控下载 出处=AUDIT.md#sec-declared 复审=2026-12-18
+    real = skill_package._url_safe
+    # 仅放行本测试首跳 URL；重定向目标仍走真实 SSRF 检查
+    monkeypatch.setattr(skill_package, "_url_safe", lambda u: u == first or real(u))
     try:
         with pytest.raises(ValueError, match="已拒绝"):
-            skill_package._download_url_with_redirects(f"http://localhost:{srv.server_port}/src.zip", 1024, False)  # forge-declared: SEC-4 理由=skill_package 为安全检测器规则字典/其攻击样本测试，非真实执行；下载为 SSRF 逐跳+超限确认的受控下载 出处=AUDIT.md#sec-declared 复审=2026-12-18
+            skill_package._download_url_with_redirects(first, 1024, False)  # forge-declared: SEC-4 理由=skill_package 为安全检测器规则字典/其攻击样本测试，非真实执行；下载为 SSRF 逐跳+超限确认的受控下载 出处=AUDIT.md#sec-declared 复审=2026-12-18
+        assert seen == ["/src.zip"]  # 首跳真经过服务器一次，私网重定向被拒
     finally:
         srv.shutdown()
         t.join()
@@ -240,3 +248,74 @@ def test_parse_skillhub_search(skill_package):
     assert rows[1]["namespace"] == ""
     assert rows[2]["namespace"] == "user_x"
     assert skill_package._parse_skillhub_search("no matches") == []
+
+
+# ---------- 5. 评审修复回归 ----------
+
+def test_exec_eval_string_and_var(skill_package):
+    h1 = skill_package.audit_text('eval("1+1")', 'run.py')  # forge-declared: SEC-3 理由=skill_package 为安全检测器规则字典/其攻击样本测试，非真实执行；下载为 SSRF 逐跳+超限确认的受控下载 出处=AUDIT.md#sec-declared 复审=2026-12-18
+    h2 = skill_package.audit_text('exec(code)', 'run.py')  # forge-declared: SEC-3 理由=skill_package 为安全检测器规则字典/其攻击样本测试，非真实执行；下载为 SSRF 逐跳+超限确认的受控下载 出处=AUDIT.md#sec-declared 复审=2026-12-18
+    assert any(i["rule"] == "exec_shell" for i in h1)
+    assert any(i["rule"] == "exec_shell" for i in h2)
+
+
+def test_frontmatter_folded_block(skill_package):
+    fm = skill_package.parse_frontmatter("---\ndescription: >-\n  hello\n  world\n---\n# x")
+    assert fm["description"] == "hello world"
+    fm2 = skill_package.parse_frontmatter("---\ndescription: |\n  a\n  b\n---\n")
+    assert fm2["description"] == "a\nb"
+
+
+def test_audit_oversize_script_not_safe(skill_package, tmp_path, monkeypatch):
+    d = tmp_path / "s"
+    d.mkdir()
+    (d / "SKILL.md").write_text("# ok\n", encoding="utf-8")
+    (d / "big.py").write_text("x=1\n", encoding="utf-8")
+    monkeypatch.setattr(skill_package, "_AUDIT_MAX_SCRIPT_BYTES", 2)
+    rep = skill_package.audit_skill_dir({"path": str(d), "name": "s", "dirname": "s", "kind": "local"})
+    assert rep["level"] != "safe"
+    assert any(i["rule"] == "script_too_large" for i in rep["issues"])
+
+
+def test_audit_script_read_error_not_safe(skill_package, tmp_path, monkeypatch):
+    import builtins
+    d = tmp_path / "s"
+    d.mkdir()
+    (d / "SKILL.md").write_text("# ok\n", encoding="utf-8")
+    (d / "bad.py").write_text("x=1\n", encoding="utf-8")
+    real_open = builtins.open
+
+    def fake_open(f, *a, **k):
+        if str(f).endswith("bad.py"):
+            raise PermissionError("denied")
+        return real_open(f, *a, **k)
+
+    monkeypatch.setattr(builtins, "open", fake_open)
+    rep = skill_package.audit_skill_dir({"path": str(d), "name": "s", "dirname": "s", "kind": "local"})
+    assert rep["level"] != "safe"
+    assert any(i["rule"] == "script_read_error" for i in rep["issues"])
+
+
+def test_stage_from_url_cleans_download_tmp(skill_package, tmp_path, monkeypatch):
+    import shutil as _sh
+    import zipfile as _zf
+    zp = tmp_path / "s.zip"
+    with _zf.ZipFile(zp, "w") as z:
+        z.writestr("s/SKILL.md", "# x")
+    body = zp.read_bytes()
+    created = []
+    real_mkdtemp = skill_package.tempfile.mkdtemp
+
+    def spy(*a, **k):
+        p = real_mkdtemp(*a, **k)
+        created.append(p)
+        return p
+
+    monkeypatch.setattr(skill_package.tempfile, "mkdtemp", spy)
+    monkeypatch.setattr(skill_package, "_url_safe", lambda u: True)
+    monkeypatch.setattr(skill_package, "_download_url_with_redirects", lambda *a, **k: body)
+    root, name, tmp = skill_package.stage_from_url("https://example.com/s.zip", False)  # forge-declared: SEC-4 理由=skill_package 为安全检测器规则字典/其攻击样本测试，非真实执行；下载为 SSRF 逐跳+超限确认的受控下载 出处=AUDIT.md#sec-declared 复审=2026-12-18
+    assert os.path.isdir(tmp) and name == "s"
+    dl = [p for p in created if p != tmp]
+    assert dl and all(not os.path.isdir(p) for p in dl)  # 下载 tmp 已清理，解压 tmp 保留
+    _sh.rmtree(tmp, ignore_errors=True)
