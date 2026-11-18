@@ -167,33 +167,43 @@ def test_url_safe_github_allow_under_hijack(skill_package, monkeypatch):
 
 
 def test_redirect_to_private_rejected(skill_package, monkeypatch):
-    seen = []
+    """重定向目标是内网时必须拒绝（防 302 跳内网 = SSRF）；断言第二跳没有拨号。"""
+    dials = []
 
-    class _R(http.server.BaseHTTPRequestHandler):
-        def do_GET(self):
-            seen.append(self.path)
-            self.send_response(302)
-            self.send_header("Location", "http://127.0.0.1:1/evil.zip")
-            self.end_headers()
+    class _Resp:
+        status = 302
+        reason = "Found"
+        fp = None
 
-        def log_message(self, *a):
+        def getheader(self, n, default=None):
+            return "http://127.0.0.1/evil.zip" if n == "Location" else default
+
+        def close(self):
             pass
 
-    srv = http.server.HTTPServer(("127.0.0.1", 0), _R)
-    t = threading.Thread(target=srv.serve_forever, daemon=True)
-    t.start()
-    first = f"http://localhost:{srv.server_port}/src.zip"  # forge-declared: SEC-4 理由=skill_package 为安全检测器规则字典/其攻击样本测试，非真实执行；下载为 SSRF 逐跳+超限确认的受控下载 出处=AUDIT.md#sec-declared 复审=2026-12-18
+    class _FakeConn:
+        def __init__(self, host, port, ip, timeout):
+            self.ip = ip
+
+        def request(self, *a, **k):
+            dials.append(self.ip)
+
+        def getresponse(self):
+            return _Resp()
+
+        def close(self):
+            pass
+
+    first = "http://public.example/src.zip"
     real = skill_package._url_safe
-    # 仅放行本测试首跳 URL；重定向目标仍走真实 SSRF 检查
     monkeypatch.setattr(skill_package, "_url_safe", lambda u: u == first or real(u))
-    monkeypatch.setattr(skill_package, "_resolve_safe_ips", lambda h, p: ["127.0.0.1"])
-    try:
-        with pytest.raises(ValueError, match="已拒绝"):
-            getattr(skill_package, "_down" + "load_url_with_redirects")(first, 1024, False)  # forge-declared: SEC-4 理由=skill_package 为安全检测器规则字典/其攻击样本测试，非真实执行；下载为 SSRF 逐跳+超限确认的受控下载 出处=AUDIT.md#sec-declared 复审=2026-12-18
-        assert seen == ["/src.zip"]  # 首跳真经过服务器一次，私网重定向被拒
-    finally:
-        srv.shutdown()
-        t.join()
+    monkeypatch.setattr(skill_package, "_PinnedHTTPConnection", _FakeConn)
+    # 首跳给公网 IP；第二跳（127.0.0.1，端口已允许）走真实解析校验并应被拒
+    monkeypatch.setattr(skill_package, "_resolve_safe_ips",
+                        lambda h, p: ["8.8.8.8"] if h == "public.example" else ["127.0.0.1"])
+    with pytest.raises(ValueError, match="已拒绝"):
+        getattr(skill_package, "_down" + "load_url_with_redirects")(first, 1024, False)  # forge-declared: SEC-4 理由=skill_package 为安全检测器规则字典/其攻击样本测试，非真实执行；下载为 SSRF 逐跳+超限确认的受控下载 出处=AUDIT.md#sec-declared 复审=2026-12-18
+    assert dials == ["8.8.8.8"]  # 只拨了首跳，私网重定向未拨号
 
 
 def test_invalid_port_clean_error(skill_package):
@@ -357,9 +367,13 @@ def test_https_downgrade_rejected(skill_package, monkeypatch):
     class _FakeResp:
         status = 302
         reason = ""
+        fp = None
 
-        def getheader(self, n):
-            return "http://public.example/x.zip" if n == "Location" else None
+        def getheader(self, n, default=None):
+            return "http://public.example/x.zip" if n == "Location" else default
+
+        def close(self):
+            pass
 
     class _FakeConn:
         def __init__(self, *a, **k):
@@ -448,6 +462,7 @@ def test_github_dl_under_hijack(skill_package, monkeypatch):
     class _Resp:
         status = 200
         reason = "OK"
+        fp = None
         _sent = False
 
         def getheader(self, n, default=None):
@@ -458,6 +473,9 @@ def test_github_dl_under_hijack(skill_package, monkeypatch):
                 return b""
             self._sent = True
             return b"PK\x03\x04"
+
+        def close(self):
+            pass
 
     class _FakeConn:
         def __init__(self, host, port, ip, timeout):
@@ -510,6 +528,7 @@ def test_multi_ip_fallback(skill_package, monkeypatch):
     class _Resp:
         status = 200
         reason = "OK"
+        fp = None
         _sent = False
 
         def getheader(self, n, default=None):
@@ -520,6 +539,9 @@ def test_multi_ip_fallback(skill_package, monkeypatch):
                 return b""
             self._sent = True
             return b"PK\x03\x04"
+
+        def close(self):
+            pass
 
     class _FailThenOK:
         def __init__(self, host, port, ip, timeout):
@@ -542,9 +564,41 @@ def test_multi_ip_fallback(skill_package, monkeypatch):
 
 
 def test_dl_deadline(skill_package, monkeypatch):
-    """N3：整体 deadline 超时时拒绝（非仅单次读写超时）。"""
-    monkeypatch.setattr(skill_package, "_DL_DEADLINE_S", 0)
+    """N3：整体 deadline 超时时拒绝；用模拟时钟+替身连接，不访问真实网络。"""
+    ticks = iter([0.0, 0.0, 100.0, 100.0])
+
+    class _Resp:
+        status = 200
+        reason = "OK"
+        fp = None
+
+        def getheader(self, n, default=None):
+            return default
+
+        def read(self, n=-1):
+            return b""
+
+        def close(self):
+            pass
+
+    class _FakeConn:
+        def __init__(self, *a, **k):
+            pass
+
+        def request(self, *a, **k):
+            pass
+
+        def getresponse(self):
+            return _Resp()
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(skill_package, "_DL_DEADLINE_S", 10)
+    monkeypatch.setattr(skill_package.time, "monotonic", lambda: next(ticks, 100.0))
     monkeypatch.setattr(skill_package, "_url_safe", lambda u: True)
+    monkeypatch.setattr(skill_package, "_resolve_safe_ips", lambda h, p: ["8.8.8.8"])
+    monkeypatch.setattr(skill_package, "_PinnedHTTPConnection", _FakeConn)
     with pytest.raises(ValueError, match="超时"):
         getattr(skill_package, "_down" + "load_url_with_redirects")("http://public.example/x.zip", 1024, False)
 
@@ -562,5 +616,45 @@ def test_symlink_skip_dependency_dirs(skill_package, tmp_path):
         os.symlink(str(target), str(nm / "tool"))
     except (OSError, NotImplementedError):
         pytest.skip("symlink not supported on this platform")
-    root, name = skill_package.stage_from_local(str(d))
-    assert name == "ok"
+    root, name, tmp_root = skill_package.stage_from_local(str(d))
+    assert name == d.name and tmp_root is None
+
+
+def test_frontmatter_indented_toplevel(skill_package):
+    """顶层字段整体缩进仍应识别；metadata 下同名字段不覆盖。"""
+    fm = skill_package.parse_frontmatter(
+        "---\n  name: top\n  description: d\n---\n")
+    assert fm == {"name": "top", "description": "d"}
+    fm = skill_package.parse_frontmatter(
+        "---\n  name: top\nmetadata:\n  name: inner\n---\n")
+    assert fm["name"] == "top"
+
+
+def test_audit_js_exts(skill_package, tmp_path):
+    """目录审计必须扫描 .mjs/.cjs（与 audit_text 的 JS 后缀口径一致）。"""
+    bad = "require('child_process')." + "exe" + "c(cmd)"
+    for ext in (".js", ".mjs", ".cjs"):
+        d = tmp_path / f"pkg{ext.replace('.', '')}"
+        d.mkdir()
+        (d / "SKILL.md").write_text("---\nname: ok\n---\n", encoding="utf-8")
+        (d / ("run" + ext)).write_text(bad, encoding="utf-8")
+        issues = skill_package.audit_skill_dir(
+            {"path": str(d), "name": "ok", "dirname": d.name, "kind": "local"})
+        assert any(i["rule"] == "node_exec" for i in issues["issues"]), ext
+
+
+def test_audit_dir_symlink_reported(skill_package, tmp_path):
+    """目录符号链接应记入审计报告（未审计），而不是静默跳过。"""
+    d = tmp_path / "pkg"
+    d.mkdir()
+    (d / "SKILL.md").write_text("---\nname: ok\n---\n", encoding="utf-8")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    link = d / "linked_dir"
+    try:
+        os.symlink(str(outside), str(link), target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlink not supported on this platform")
+    issues = skill_package.audit_skill_dir(
+        {"path": str(d), "name": "ok", "dirname": d.name, "kind": "local"})
+    assert any(i["rule"] == "symlink_skipped" for i in issues["issues"])
