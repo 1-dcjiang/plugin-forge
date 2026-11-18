@@ -67,3 +67,29 @@ def test_刷新脚本不许声称自检不读用户目录(repo_root):
     # 断言要指着具体句子，不能只查两个常见词是否出现（那种断言几乎恒真）
     assert "settings.json" in src and "mcp.json" in src,         "口径要点名到底读哪几个文件，光写「只读」没有信息量"
     assert "open()" in src, "口径要写明这条是用什么测出来的"
+
+
+def test_rbb_钉版四处必须一致(repo_root):
+    """先搜后建的上游钉版散在四个文件里，只改两处就会自相矛盾（A791 文档项）。
+
+    这条杆只核「四个文件写的是同一组版本号 + commit」，不核上游真有没有那个 tag：
+    真伪靠人跑 GitHub API 核对，日期与出处记在 AUDIT.md 第 17 行那一格里。
+    每个文件取第一个匹配：当前钉版写在最前，历史版本跟在「此前」后面。
+    """
+    pats = {
+        "skills/plugin-forge/SKILL.md":
+            r"v(\d+\.\d+\.\d+)\s*/\s*([0-9a-f]{7})",
+        "skills/plugin-forge/references/workflows.md":
+            r"v(\d+\.\d+\.\d+)\s*/\s*commit\s*([0-9a-f]{7})",
+        "NOTICE":
+            r"v(\d+\.\d+\.\d+),\s*commit\s*([0-9a-f]{7})",
+        "AUDIT.md":
+            r"v(\d+\.\d+\.\d+)\s*/\s*commit\s*([0-9a-f]{7})",
+    }
+    found = {}
+    for rel, pat in pats.items():
+        m = re.search(pat, _read(repo_root, rel))
+        assert m, "%s 里找不到 rbb 钉版（版本号 + commit）" % rel
+        found[rel] = m.groups()
+    distinct = set(found.values())
+    assert len(distinct) == 1, "rbb 钉版四处不一致，只改了两处？%s" % found
