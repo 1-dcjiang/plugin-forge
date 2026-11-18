@@ -210,3 +210,43 @@ def test_真装载对裸模块名写法必须报装不进(dry_load, tmp_path):
     code, rep = dry_load.run(pkg_root, py=sys.executable, repo=fake)
     assert code == 1, rep
     assert any("装不进" in x for x in rep["problems"]), rep["problems"]
+
+
+def test_拿不到凭据判据必须停跑(dry_load, tmp_path, monkeypatch):
+    """A791 第 2 条③：sandbox import 坏掉时，旧版只打一行警告就照跑。
+
+    那时子进程继承宿主全部环境变量，凭据过滤整个跳过，结论还照打「通过」。
+    现在 fail-closed：不跑真装载，退出码 2，结论行写「环境阻断」。
+    """
+    import contextlib
+    import io as _io
+    import sys
+
+    # 让 `from sandbox import env_is_secret` 立刻 ImportError：
+    # sys.modules 里放 None 是 Python 自己的「该模块不可用」语义，不用改文件系统。
+    monkeypatch.setitem(sys.modules, "sandbox", None)
+    d = _pkg(tmp_path, "demo_plugin", TOML_OK, {"__init__.py": SRC_OK})
+    fake = _fake_repo(str(tmp_path / "repo"))
+    code, rep = dry_load.run(d, py=sys.executable, repo=fake)
+
+    assert code == 2, rep
+    assert rep["mode"] == "blocked"
+    assert any("凭据过滤" in x for x in rep["problems"]), rep["problems"]
+
+    buf = _io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        dry_load._print(rep, code)
+    out = buf.getvalue()
+    assert "环境阻断" in out and "没核过" in out, out
+    assert "结论：通过" not in out and "结论：降级通过" not in out, out
+
+
+def test_凭据判据在就直接按沙箱口径过滤(dry_load, tmp_path):
+    """反向对照：判据拿得到时，宿主的凭据变量必须不进子进程环境。"""
+    os.environ["FORGE_PROBE_API_KEY"] = "sk-" + "probe0123456789012345678901"
+    try:
+        env = dry_load._isolated_env(str(tmp_path / "home"))
+    finally:
+        os.environ.pop("FORGE_PROBE_API_KEY", None)
+    assert not [k for k in env if "FORGE_PROBE_API_KEY" in k], \
+        "宿主凭据变量漏进了子进程环境"

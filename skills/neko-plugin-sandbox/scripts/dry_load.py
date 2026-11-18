@@ -24,6 +24,8 @@
   - 插件目录名必须等于 `[plugin].id`，否则扫描不到（沙箱 SKILL.md 失败判定表）
 
 退出码：0 通过（含降级通过，会明写降级）；1 发现问题；2 用法或环境错误。
+凭据过滤判据（sandbox.env_is_secret）拿不到时也是 2：那时子进程会继承宿主全部环境，
+这一趟没核过，不许算通过。
 """
 import argparse
 import ast
@@ -45,6 +47,10 @@ RUNTIME_DECORATORS = {"llm_tool", "lifecycle", "message", "timer_interval", "cus
                       "before_entry", "after_entry", "around_entry", "replace_entry",
                       "quick_action", "hook"}
 REQUIRED_MARK = "降级模式证明不了能不能真的 import"
+
+
+class EnvBlocked(RuntimeError):
+    """真装载的前置条件不成立，这一趟不许跑，也不许降级成「通过」。"""
 
 
 def toml_section_value(text, section, key):
@@ -280,8 +286,9 @@ def _isolated_env(root_tmp):
         for k in [k for k, v in env.items() if env_is_secret(k, v)]:
             env.pop(k, None)
     except Exception as e:
-        # 判据来自 sandbox.py。拿不到它就是 fail-open：子进程继承宿主全部环境。
-        # 静默跳过等于没提示，这里必须出声（工单 A791 第 1 条）。
+        # 判据来自 sandbox.py。拿不到它就是没了凭据过滤：子进程会继承宿主全部环境。
+        # 旧版只打一行警告然后照跑（fail-open），等于「过滤失败 = 不设防」。
+        # 现在 fail-closed：不跑真装载，退出码 2，输出里说明这一趟没核过（A791 第 2 条③）。
         # 出声之前先把 stderr 转 UTF-8：main() 里那句 reconfigure 在这条路上没跑过
         # （模块被 import 后直接调本函数时），Windows 上默认是本机代码页 GBK，
         # 上层按 UTF-8 解出来是乱码，等于警告丢了（反证 34 实测）。
@@ -289,9 +296,10 @@ def _isolated_env(root_tmp):
             sys.stderr.reconfigure(encoding="utf-8", errors="replace")
         except Exception:
             pass
-        print("dry_load 警告：拿不到 sandbox.env_is_secret，凭据过滤已跳过（%s）。"
-              "子进程会继承宿主环境变量。请把 sandbox.py 和 dry_load.py 一起拉取。"
-              % type(e).__name__, file=sys.stderr)
+        raise EnvBlocked(
+            "凭据过滤判据拿不到（sandbox.env_is_secret：%s）——拒绝继续真装载："
+            "子进程会继承宿主全部环境变量。请把 sandbox.py 与 dry_load.py 一起拉取。"
+            % type(e).__name__)
     for sub in ("home", "localappdata", "appdata", "temp", "tmp"):
         try:
             os.makedirs(os.path.join(root_tmp, sub), exist_ok=True)
@@ -319,6 +327,11 @@ def real_load(pkg_dir, repo_root, py, info):
     modes = [True, False] if mod.split(".")[0] in ("plugin", "plugins") else [False]
     toml_path = os.path.abspath(os.path.join(pkg_dir, "plugin.toml"))
     tmp = tempfile.mkdtemp(prefix="dryload-home-")
+    try:
+        child_env = _isolated_env(tmp)
+    except EnvBlocked as e:
+        shutil.rmtree(tmp, ignore_errors=True)
+        return "blocked", [str(e)], ""
     script = (
         "import json, sys, pathlib\n"
         "sys.path.insert(0, %r)\n"
@@ -351,7 +364,7 @@ def real_load(pkg_dir, repo_root, py, info):
         for so in modes:
             r = subprocess.run([py, "-c", script.replace("__SOURCE_ONLY__", repr(so))],
                                capture_output=True, text=True,
-                               timeout=180, env=_isolated_env(tmp), cwd=tmp)
+                               timeout=180, env=child_env, cwd=tmp)
             outs.append(((r.stdout or "") + (r.stderr or "")).strip())
             codes.append(r.returncode)
             if r.returncode == 0:      # 有一档装得进就用那一档的结果，别把成功读成两份
@@ -435,6 +448,12 @@ def run(pkg_dir, sandbox_root=None, quiet=False, py=None, repo=None):
             report["mode"] = "real-import"
             report["real_load_output"] = tail
             problems += rp
+        elif kind == "blocked":
+            # 凭据过滤判据缺席：既不是插件的问题，也不是可以降级的情形。
+            # 单列 blocked，退出码 2，输出里不许出现「通过」（A791 第 2 条③）。
+            report["mode"] = "blocked"
+            report["degrade_reason"] = (rp[0] if rp else "凭据过滤判据不可用")[:220]
+            problems += rp
         else:
             report["mode"] = "ast-fallback"
             report["note"] = REQUIRED_MARK
@@ -444,6 +463,8 @@ def run(pkg_dir, sandbox_root=None, quiet=False, py=None, repo=None):
         report["mode"] = "ast-fallback"
         report["note"] = REQUIRED_MARK
     report["problems"] = problems
+    if report.get("mode") == "blocked":
+        return 2, report
     return (1 if problems else 0), report
 
 
@@ -466,6 +487,8 @@ def _print(report, code):
         verdict = "通过" if report.get("mode") == "real-import" else "降级通过"
     elif code == 1:
         verdict = "发现问题 %d 处" % len(report.get("problems", []))
+    elif report.get("mode") == "blocked":
+        verdict = "环境阻断：这一趟没核过，不算通过"
     else:
         verdict = "用法或环境错误"
     print("结论：%s" % verdict)
