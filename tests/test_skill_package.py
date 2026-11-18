@@ -666,7 +666,7 @@ def test_audit_dir_symlink_reported(skill_package, tmp_path):
 def test_frontmatter_block_scalar_indented_delimiter(skill_package):
     """块标量里缩进的 --- 是内容，不能提前关闭 frontmatter。"""
     fm = skill_package.parse_frontmatter(
-        "---\ndescription: |-\n  ---\n  detail\nname: x\n---\nbody")
+        "--- \ndescription: |-\n  ---\n  detail\nname: x\n--- \nbody")
     assert fm["description"] == "---\ndetail"
     assert fm["name"] == "x"
 
