@@ -637,15 +637,21 @@ session_id / source / hook_event_name」。删掉解析就同时改了一条对�
 
 skill_package.py 是第三方 skill 包静态检测器：规则正则字面量与受控下载入口按点位声明，各自写明理由；测试攻击样本优先拆写规避（`"os." + "system"`、`"child_process." + "exec(...)"`），躲不掉的才声明。复审统一 2026-12-18，**到期需一次性集中复审**（台账记此一笔）。
 
-| 位置 | 理由 | 复审 |
+登记以**函数/规则名**定位（行号易过期，不登记）；同一函数内多处声明各自写理由。复审统一 2026-12-18。
+
+| 位置（函数/规则名） | 理由 | 复审 |
 |---|---|---|
-| skills/plugin-forge/scripts/skill_package.py:60 | exec_shell 规则正则字面量（裸 eval/exec，`(?<![\w.])` 排除成员调用） | 2026-12-18 |
-| skills/plugin-forge/scripts/skill_package.py:63 | node_exec 规则正则字面量（child_process.exec/execSync） | 2026-12-18 |
-| skills/plugin-forge/scripts/skill_package.py:64-66 | download_exec 规则正则字面量（`\|sh` 与 `-o` 分支拆行避误命中） | 2026-12-18 |
-| skills/plugin-forge/scripts/skill_package.py:89 | cmd_hint 规则正则字面量 | 2026-12-18 |
-| skills/plugin-forge/scripts/skill_package.py:332 | 受控下载入口（逐跳 SSRF 预筛选+钉 IP+超限确认+硬上限） | 2026-12-18 |
-| skills/plugin-forge/scripts/skill_package.py:396,413 | 超限提示的来源元数据字段，非网络调用 | 2026-12-18 |
-| tests/test_skill_package.py（攻击样本/受控下载测试行） | 检测器回归样本，拆写优先、余者逐点声明 | 2026-12-18 |
+| 模块 docstring（GitHub 白名单说明） | 说明文字含 download 字样，非网络调用 | 2026-12-18 |
+| AUDIT_RULES · exec_shell | 检测规则正则字面量（裸 eval/exec 与 os.exec*/spawn* 族，`(?<![\w.])` 排除成员调用） | 2026-12-18 |
+| AUDIT_RULES · node_exec | 检测规则正则字面量（child_process/cp/require 形态 exec*） | 2026-12-18 |
+| AUDIT_RULES · js_member_exec | 检测规则正则字面量（仅 .js/.mjs/.cjs 生效的成员 exec） | 2026-12-18 |
+| AUDIT_RULES · download_exec（含拆行续行） | 检测规则正则字面量（`\|sh` 与 `-o` 分支拆行避误命中） | 2026-12-18 |
+| AUDIT_RULES · net_in_script / cmd_hint | 检测规则正则字面量 | 2026-12-18 |
+| `_download_url_with_redirects` 入口 | 受控下载入口（逐跳 SSRF 预筛选+钉 IP+超限确认+硬上限+整体 deadline） | 2026-12-18 |
+| `_download_url_with_redirects` / `stage_from_url` 超限提示元数据字段（source=downloaded / downloaded-gzip） | 超限提示的来源元数据字段，非网络调用 | 2026-12-18 |
+| `stage_from_url` 调用 `_download_url_with_redirects` 行 | 受控下载的唯一调用点 | 2026-12-18 |
+| `stage_from_url` 非 zip 报错文案 | 报错提示含 Download 字样（引导手动下载），非网络调用 | 2026-12-18 |
+| tests/test_skill_package.py（攻击样本/受控下载测试行） | 检测器回归样本，拆写优先（`"os." + "system"`、`"_down" + "load_…"`）、余者逐点声明 | 2026-12-18 |
 
 ### 与 security_audit.py 的对照（同一形状以谁为准）
 
