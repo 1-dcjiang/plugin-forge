@@ -313,6 +313,32 @@ def test_audit_script_read_error_not_safe(skill_package, tmp_path, monkeypatch):
     assert any(i["rule"] == "script_read_error" for i in rep["issues"])
 
 
+def test_audit_script_read_error_relpath_cross_drive(skill_package, tmp_path, monkeypatch):
+    """script_read_error 的 rel 也必须走 _rel；跨盘 ValueError 不得让审计崩。"""
+    import builtins
+    d = tmp_path / "s"
+    d.mkdir()
+    (d / "SKILL.md").write_text("# ok\n", encoding="utf-8")
+    (d / "bad.py").write_text("x=1\n", encoding="utf-8")
+    real_open = builtins.open
+
+    def fake_open(f, *a, **k):
+        if str(f).endswith("bad.py"):
+            raise PermissionError("denied")
+        return real_open(f, *a, **k)
+
+    def fake_relpath(p, start):
+        raise ValueError("path is on mount D:, start on mount C:")
+
+    monkeypatch.setattr(builtins, "open", fake_open)
+    monkeypatch.setattr(skill_package.os.path, "relpath", fake_relpath)
+    rep = skill_package.audit_skill_dir(
+        {"path": str(d), "name": "s", "dirname": "s", "kind": "local"})
+    assert rep["level"] != "safe"
+    err = next(i for i in rep["issues"] if i["rule"] == "script_read_error")
+    assert err["where"] == str(d / "bad.py")
+
+
 def test_stage_from_url_cleans_dl_tmp(skill_package, tmp_path, monkeypatch):
     import shutil as _sh
     import zipfile as _zf

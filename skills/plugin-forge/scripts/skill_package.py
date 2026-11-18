@@ -620,7 +620,7 @@ def audit_skill_dir(item):
                        "where": "/", "line": 0, "count": 1,
                        "hint": f"脚本数 {len(scripts)} 超过 {_AUDIT_MAX_SCRIPTS}，超出部分未审计"})
     for sp in scripts[:_AUDIT_MAX_SCRIPTS]:
-        rel = os.path.relpath(sp, path)
+        rel = _rel(sp)
         try:
             with open(sp, encoding='utf-8', errors='replace') as f:
                 sc = f.read(500_000)
