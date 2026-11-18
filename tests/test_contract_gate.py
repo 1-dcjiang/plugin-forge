@@ -128,6 +128,34 @@ def test_verify_commands_三种形状(gate, ws):
     assert allowed2 is False
 
 
+def test_版本化解释器名不算工作区路径(gate, ws, monkeypatch):
+    """A791 第 2 条①：`python3.11 -m pytest` 曾被 `"." in last` 判成工作区文件，
+    报「命令指向的文件不在工作区」。
+
+    现在只有带分隔符（或以 ./ ../ 开头）的才算路径，其余交给 which。
+    which 在这里被打桩，判据方向不依赖本机装没装 python3.11。
+    """
+    import shutil
+
+    monkeypatch.setattr(shutil, "which", lambda name: "/fake/bin/" + name)
+
+    _rel, allowed, why = _one(gate, ws, ws / "src" / "a.py",
+                              verify_commands=["python3.11 -m pytest"])
+    assert allowed is True, why
+
+    # exe 放宽了，参数没放宽：带后缀的路径参数照样要在工作区里真存在。
+    # （`.txt` 不在后缀表里，`-r requirements-dev.txt` 这种形状仍只验可解析——
+    #   那是「只验形状不执行」的已知边界，记在 SKILL.md 与 task-size-routing.md 里。）
+    _r2, allowed2, why2 = _one(gate, ws, ws / "src" / "a.py",
+                               verify_commands=["pip3.12 install -r ghost.py"])
+    assert allowed2 is False and "引用的文件不在工作区" in why2, why2
+
+    # 放宽 exe 判定不等于放宽参数：带后缀的路径参数照样要在工作区里真存在
+    _r3, allowed3, why3 = _one(gate, ws, ws / "src" / "a.py",
+                               verify_commands=["python3.11 ghost.py"])
+    assert allowed3 is False and "引用的文件不在工作区" in why3, why3
+
+
 def test_plan_sha256_变了旧准奏失效(gate, ws):
     plan = ws / "PLAN.md"
     plan.write_text("第一版方案\n", encoding="utf-8")

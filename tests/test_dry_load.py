@@ -250,3 +250,43 @@ def test_凭据判据在就直接按沙箱口径过滤(dry_load, tmp_path):
         os.environ.pop("FORGE_PROBE_API_KEY", None)
     assert not [k for k in env if "FORGE_PROBE_API_KEY" in k], \
         "宿主凭据变量漏进了子进程环境"
+
+
+def test_降级结论必须写明降级(dry_load, tmp_path):
+    """A791 第 2 条②：不给沙箱根必然降级，结论行不许写成「通过」。"""
+    import contextlib
+    import io as _io
+
+    d = _pkg(tmp_path, "demo_plugin", TOML_OK, {"__init__.py": SRC_OK})
+    code, rep = dry_load.run(d)
+    assert (code, rep["mode"]) == (0, "ast-fallback"), rep
+
+    buf = _io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        dry_load._print(rep, code)
+    out = buf.getvalue()
+    assert "结论：降级通过" in out, out
+    assert "结论：通过" not in out.replace("结论：降级通过", ""), out
+    assert "降级模式证明不了能不能真的 import" in out, out
+
+
+def test_真装载超时单列失败不降级(dry_load, tmp_path, monkeypatch):
+    """A791 第 2 条②：TimeoutExpired 是 SubprocessError 的子类。
+
+    旧版被归成「环境缺」→ 降级 → 退出码 0，import 期死循环的插件拿到「通过」。
+    现在超时是真装载失败：mode 保持 real-import，退出码 1。
+    """
+    import subprocess as _sp
+    import sys
+
+    def _boom(*a, **k):
+        raise _sp.TimeoutExpired(cmd="dryload", timeout=180)
+
+    monkeypatch.setattr(dry_load.subprocess, "run", _boom)
+    d = _pkg(tmp_path, "demo_plugin", TOML_OK, {"__init__.py": SRC_OK})
+    fake = _fake_repo(str(tmp_path / "repo"))
+    code, rep = dry_load.run(d, py=sys.executable, repo=fake)
+
+    assert rep["mode"] == "real-import", rep
+    assert code == 1, rep
+    assert any("超时" in x for x in rep["problems"]), rep["problems"]
