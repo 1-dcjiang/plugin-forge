@@ -5,6 +5,7 @@
 用法
   python security_audit.py <repo路径> [--allow 相对路径前缀,...] [--allow 另一个] [--include-docs]
                            [--json] [--quiet] [--fail-unclear] [--strict-placeholder]
+                           [--declared-list 审核方清单.json]
 
 四项计分检查 + 一项不计分提示（细则与评分规则见 references/security-checklist.md）
   SEC-1 路径范围：写/删操作指向项目外、敏感家目录，或残留个人绝对路径。
@@ -23,6 +24,9 @@
 （SEC-1/SEC-2 文档残留检查）。--allow 用于外部仓库的整份豁免，前缀匹配。
 本仓自己不用 --allow：豁免走点位声明，写在行尾注释里，四段必填
 （SEC-n、理由=、出处=含 AUDIT.md 的锚点、复审=YYYY-MM-DD），缺一段或过期就失效。
+**行尾声明只在本仓自扫时生效。** 审外部仓库时它是被审方自己能写的东西，一律不算豁免：
+要在外部仓上豁免，只能用审核方持有的 `--declared-list` 清单（仓库外 JSON，
+每条用 SHA-256 绑住那一行正文，带 reviewer 与到期日）。被审方改一行，声明立刻失效。
 --strict-declared 把畸形标记直接判成问题。这是分诊器，不是裁判：命中仍要逐条人工判定。
 
 退出码：0 放行（≥90）；1 修完再放（50–89）；2 阻断（SEC-2 有发现或 <50）；
@@ -31,7 +35,7 @@
 设计参照：清单形状检查与「盲区不得当作放行」两点取自 jusspound-netizen/dsh-plugin-scanner
 （bb8dc7cd，2026-11-14；该仓库无 LICENSE 文件，本文件为独立实现，未复制其代码）。
 """
-import sys, os, re, json, argparse, tempfile, shutil, subprocess
+import sys, os, re, json, argparse, tempfile, shutil, subprocess, hashlib
 
 # 上游源码镜像（漂移探针的缓存）。这些文件是别人仓库的正文，扫它们等于把上游的
 # 示例 token 记到本仓库头上：--include-docs 一开就被 314 个镜像文件淹没。
@@ -547,10 +551,81 @@ def _covers(cid, line):
     return bool(m) and m.group(1) == cid
 
 
+def _is_self_repo(root):
+    """root 是不是本仓库自己。豁免信道按「谁在审谁」分（工单 A791 第 1 条）。
+
+    本仓自扫时审核方 = 被审方，行尾声明照旧生效，51 处声明零回归。
+    审外部仓时行尾注释是被审方自己能写的东西——被审对象不能给自己发通行证。
+    判据不看路径长相，看被审仓里那份扫描器是不是正在跑的这个文件：
+    外部仓就算抄一份同名脚本进来，realpath 也不会等于自己这一份。
+    """
+    own = os.path.realpath(os.path.abspath(__file__))
+    for base in (root, os.path.join(root, "skills", "plugin-forge")):
+        if os.path.realpath(os.path.join(base, "scripts", "security_audit.py")) == own:
+            return True
+    return False
+
+
+def load_declared_list(path):
+    """读审核方控制的点位声明清单（仓库外 JSON）。
+
+    清单不在被审仓库里，被审方写不进去；每条用 SHA-256 绑住那一行的正文，
+    改一个字符就失效。少 reviewer / 到期日 / 完整 sha256 的条目直接丢弃，
+    不猜、不降级：清单本身坏掉时宁可报「没有豁免」。
+    """
+    import datetime
+    with open(path, encoding="utf-8-sig") as f:
+        data = json.load(f)
+    entries = data.get("entries") if isinstance(data, dict) else None
+    if not isinstance(entries, list):
+        raise ValueError("清单缺 entries 数组")
+    today = datetime.date.today().isoformat()
+    table = {}
+    for e in entries:
+        if not isinstance(e, dict):
+            continue
+        rel = str(e.get("file", "")).replace("\\", "/")
+        while rel.startswith("./"):
+            rel = rel[2:]
+        sec = str(e.get("sec", ""))
+        digest = str(e.get("sha256", "")).lower()
+        who = str(e.get("reviewer", "")).strip()
+        expires = str(e.get("expires", ""))
+        if not rel or sec not in CHECKS or len(digest) != 64 or not who:
+            continue
+        if not re.match(r"^\d{4}-\d{2}-\d{2}$", expires) or expires < today:
+            continue
+        table[(rel, sec, digest)] = who
+    return table
+
+
+def _decl_verdict(root, rel, line, honor_inline, declared_list):
+    """这一行的声明能不能豁免，返回 (ok, note)。
+
+    信道优先级：审核方清单 > 本仓行尾声明。外部仓没有清单 = 没有豁免。
+    """
+    ok, note = _declaration(line)
+    if not ok:
+        return ok, note
+    m = DECLARE_RE.search(line)
+    cid = m.group(1)
+    digest = hashlib.sha256(line.strip().encode("utf-8")).hexdigest()
+    if declared_list and (rel, cid, digest) in declared_list:
+        return True, ("%s 理由=%s 复审=%s（审核方清单，审核人 %s）"
+                      % (cid, m.group(2).strip(), m.group(4),
+                         declared_list[(rel, cid, digest)]))
+    if not honor_inline:
+        return False, ("外部仓库的行尾声明不生效（%s）：豁免只能来自审核方 "
+                       "--declared-list 清单" % cid)
+    if not citation_ok(root, line):
+        return False, "出处在被审仓库里查无记录（%s）" % m.group(3)
+    return True, note
+
+
 declared_cache = None
 
 
-def scan(root, include_docs, allow, declared=None):
+def scan(root, include_docs, allow, declared=None, honor_inline=None, declared_list=None):
     findings = {c: [] for c in CHECKS}
     seen = set()
     scanned = 0
@@ -559,6 +634,8 @@ def scan(root, include_docs, allow, declared=None):
     adv = []
     global declared_cache
     declared_cache = {}          # 每轮扫描重新计，免得跨仓复用出处文本
+    if honor_inline is None:
+        honor_inline = _is_self_repo(root)
     for rel, full in iter_files(root, include_docs, allow, skips, unclear):
         scanned += 1
         try:
@@ -578,11 +655,7 @@ def scan(root, include_docs, allow, declared=None):
             for note6, i3 in manifest_gaps(rel, chr(10).join(lines)):
                 adv.append({"file": rel, "line": i3, "note": note6, "snippet": ""})
         for i, line in enumerate(lines, 1):
-            ok_dec, note_dec = _declaration(line)
-            if ok_dec and not citation_ok(root, line):
-                # 声明格式对但出处查无记录：回到「没有声明」，并单记一条，让人看得见
-                ok_dec = False
-                note_dec = "出处在被审仓库里查无记录（%s）" % DECLARE_RE.search(line).group(3)
+            ok_dec, note_dec = _decl_verdict(root, rel, line, honor_inline, declared_list)
             if ok_dec is False and declared is not None:
                 declared["bad"].append({"file": rel, "line": i, "why": note_dec,
                                         "snippet": line.strip()[:140]})
@@ -1142,7 +1215,7 @@ def _self_test():
             "urllib.request.urlopen(q)  # forge-" + "declared: SEC-4 理由=只读探测 "  # forge-declared: SEC-4 理由=自检夹具里的网络字面量 出处=AUDIT.md#sec-declared 复审=2026-12-15
             "出处=AUDIT.md#s 复审=2001-01-01\n")
         box = {"ok": [], "bad": []}
-        _sd, _fd, _kd, _ud, _ad = scan(dd, False, [], box)
+        _sd, _fd, _kd, _ud, _ad = scan(dd, False, [], box, honor_inline=True)
         files_hit = sorted({h["file"] for h in _fd["SEC-4"]})
         if files_hit != ["stale_net.py"]:
             helper_bad.append("SEC-4 计数没有只留下过期声明那份：实得 %s" % files_hit)
@@ -1162,14 +1235,14 @@ def _self_test():
         open(os.path.join(dd, "declared_pw.py"), "w", encoding="utf-8",
              newline=chr(10)).write(pw_key + " = " + pw_val + "  " + pw_mark + chr(10))
         box2 = {"ok": [], "bad": []}
-        _s2, _f2, _k2, _u2, _a2 = scan(dd, False, [], box2)
+        _s2, _f2, _k2, _u2, _a2 = scan(dd, False, [], box2, honor_inline=True)
         pw_hits = [h for h in _f2["SEC-2"] if h["file"] == "declared_pw.py"]
         # 反向：把账本里的锚点抹掉，同一条声明必须失效，命中回到账上。
         # 这条钉住 A791 的 CRITICAL：被审方自己写一行注释就免掉一票否决。
         open(os.path.join(dd, "AUDIT.md"), "w", encoding="utf-8", newline=chr(10)).write(
             "### other · 与声明无关的标题" + chr(10))
         box2b, _sk2b, _uc2b, _f2b = [], [], [], {}
-        _s2b, _f2b, _sk2b, _uc2b, _a2b = scan(dd, False, [], {"ok": [], "bad": []})
+        _s2b, _f2b, _sk2b, _uc2b, _a2b = scan(dd, False, [], {"ok": [], "bad": []}, honor_inline=True)
         if not [h for h in _f2b["SEC-2"] if h["file"] == "declared_pw.py"]:
             helper_bad.append("出处查无记录时声明仍然生效（A791 CRITICAL 没修住）")
         if not [h for h in _f2b["SEC-4"] if h["file"] == "ok_net.py"]:
@@ -1180,9 +1253,32 @@ def _self_test():
         open(os.path.join(dd, "bare_cite.py"), "w", encoding="utf-8", newline=chr(10)).write(
             "MY_API_PASSWORD = \"Sup3rS3cretValue\"  # forge-" + "declared: SEC-2 "
             "理由=无锚点声明 出处=AUDIT.md 复审=2099-01-01" + chr(10))
-        _s2c, _f2c, _sk2c, _uc2c, _a2c = scan(dd, False, [], {"ok": [], "bad": []})
+        _s2c, _f2c, _sk2c, _uc2c, _a2c = scan(dd, False, [], {"ok": [], "bad": []}, honor_inline=True)
         if not [h for h in _f2c["SEC-2"] if h["file"] == "bare_cite.py"]:
             helper_bad.append("不带锚点的出处仍然豁免了 SEC-2（A791 R1 没修住）")
+        # 外部仓自带一本 AUDIT.md、写上锚点、再挂一条格式合法的行尾声明：仍不许自免。
+        # 这是 A791 CRITICAL 的正解——被审对象不能给自己发通行证。
+        open(os.path.join(dd, "AUDIT.md"), "w", encoding="utf-8", newline=chr(10)).write(
+            "### s" + chr(10) + "- 教学示例口令" + chr(10))
+        ext_box = {"ok": [], "bad": []}
+        _sx, _fx, _kx, _ux, _ax = scan(dd, False, [], ext_box, honor_inline=False)
+        if not [h for h in _fx["SEC-2"] if h["file"] == "declared_pw.py"]:
+            helper_bad.append("外部仓的行尾声明仍然豁免了 SEC-2（A791 CRITICAL 没堵住）")
+        if ext_box["ok"]:
+            helper_bad.append("外部仓的行尾声明被记进了豁免账：%s" % (ext_box["ok"][:1],))
+        # 审核方清单：同一行、同一类、行正文哈希对上才生效
+        pw_line = open(os.path.join(dd, "declared_pw.py"), encoding="utf-8").read().strip()
+        good_hash = hashlib.sha256(pw_line.encode("utf-8")).hexdigest()
+        lst_ok = {("declared_pw.py", "SEC-2", good_hash): "审核人甲"}
+        _sl, _fl, _kl, _ul, _al = scan(dd, False, [], {"ok": [], "bad": []},
+                                       honor_inline=False, declared_list=lst_ok)
+        if [h for h in _fl["SEC-2"] if h["file"] == "declared_pw.py"]:
+            helper_bad.append("审核方清单命中了却没生效（--declared-list 白给）")
+        lst_stale = {("declared_pw.py", "SEC-2", "0" * 64): "审核人甲"}
+        _st, _ft, _kt, _ut, _at = scan(dd, False, [], {"ok": [], "bad": []},
+                                       honor_inline=False, declared_list=lst_stale)
+        if not [h for h in _ft["SEC-2"] if h["file"] == "declared_pw.py"]:
+            helper_bad.append("清单里哈希对不上也放行了：sha256 绑定形同虚设")
         if pw_hits:
             helper_bad.append("SEC-2 的赋值判定没认点位声明：%s" % (pw_hits[:1],))
         if not any(h["file"] == "declared_pw.py" for h in box2["ok"]):
@@ -1257,6 +1353,9 @@ def main():
                     help="畸形或已过复审期的点位声明直接算问题（CI 用；默认只让声明失效，不额外报）")
     ap.add_argument("--strict-placeholder", action="store_true",
                     help="占位词后跟数字也算真值：example1234567 一类不再被吃掉，文档示例会开始报")
+    ap.add_argument("--declared-list", default=None,
+                    help="审核方控制的点位声明清单（仓库外 JSON）。行尾声明只在被审仓就是本仓时生效；"
+                         "审外部仓库时豁免只认这份清单，每条按行正文的 SHA-256 绑定")
     args = ap.parse_args()
     global STRICT_PLACEHOLDER
     STRICT_PLACEHOLDER = args.strict_placeholder
@@ -1267,8 +1366,18 @@ def main():
         print("用法错误: 不是目录:", root)
         return 2
     allow = [x.strip() for chunk in args.allow for x in chunk.split(",") if x.strip()]
+    honor_inline = _is_self_repo(root)
+    declared_list = None
+    if args.declared_list:
+        try:
+            declared_list = load_declared_list(args.declared_list)
+        except (OSError, ValueError) as e:
+            print("用法错误: 声明清单读不了: %s（%s）" % (args.declared_list, e))
+            return 2
     declared = {"ok": [], "bad": []}
-    scanned, findings, skips, unclear, adv = scan(root, args.include_docs, allow, declared)
+    scanned, findings, skips, unclear, adv = scan(root, args.include_docs, allow, declared,
+                                                  honor_inline=honor_inline,
+                                                  declared_list=declared_list)
     if args.strict_declared:
         for b in declared["bad"]:
             findings["SEC-3"].append({"file": b["file"], "line": b["line"],
@@ -1291,12 +1400,18 @@ def main():
                           "declared_ok_list": declared["ok"],
                           "declared_bad": declared["bad"],
                           "blind_spots": blind,
-                          "allow": allow, "counts": {c: len(findings[c]) for c in CHECKS},
+                          "allow": allow,
+                          "inline_declarations_honored": honor_inline,
+                          "declared_list": args.declared_list,
+                          "counts": {c: len(findings[c]) for c in CHECKS},
                           "findings": findings, "score": s, "total": total,
                           "verdict": verdict}, ensure_ascii=False, indent=1))
         return code
     print("仓库: %s | 扫描 %d 个文件 | 豁免 %s" % (root.replace("\\", "/"), scanned,
                                                   ",".join(allow) or "无"))
+    print("豁免信道: 行尾声明%s | 审核方清单 %s"
+          % ("生效（本仓自扫）" if honor_inline else "不生效（外部仓库，被审方不能自己发通行证）",
+             args.declared_list or "未提供"))
     if skips:
         from collections import Counter
         kinds = Counter(x.rsplit("（", 1)[-1].rstrip("）") for x in skips)
@@ -1331,9 +1446,12 @@ def main():
     if dec_n or dec_b:
         print("提醒: 本轮 %d 处点位声明不计分、%d 处声明畸形或已过期；逐条看 --json 的 "
               "declared_ok_list 与 declared_bad。" % (dec_n, dec_b))
-    print("提醒: 这是分诊器。命中要逐条人工判定。豁免优先走行尾点位声明"
-          "（`forge-declared: SEC-n 理由=… 出处=<审计记录>… 复审=YYYY-MM-DD`）；"
-          "整份文件的 --allow 只留给外部仓库与工具自身，每条仍要在审计记录里给依据。")
+    print("提醒: 这是分诊器。命中要逐条人工判定。%s"
+          "整份文件的 --allow 只留给外部仓库与工具自身，每条仍要在审计记录里给依据。"
+          % ("豁免优先走行尾点位声明"
+             "（`forge-declared: SEC-n 理由=… 出处=<审计记录>… 复审=YYYY-MM-DD`）；"
+             if honor_inline else
+             "外部仓库的行尾声明不计豁免，只能由审核方用 --declared-list 提供清单；"))
     return code
 
 
