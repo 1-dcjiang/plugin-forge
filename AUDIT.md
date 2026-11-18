@@ -644,7 +644,6 @@ skill_package.py 是第三方 skill 包静态检测器：规则正则字面量�
 | 模块 docstring（GitHub 白名单说明） | 说明文字含 download 字样，非网络调用 | 2026-12-18 |
 | AUDIT_RULES · exec_shell | 检测规则正则字面量（裸 eval/exec 与 os.exec*/spawn* 族，`(?<![\w.])` 排除成员调用） | 2026-12-18 |
 | AUDIT_RULES · node_exec | 检测规则正则字面量（child_process/cp/require 形态 exec*） | 2026-12-18 |
-| AUDIT_RULES · js_member_exec | 检测规则正则字面量（仅 .js/.mjs/.cjs 生效的成员 exec） | 2026-12-18 |
 | AUDIT_RULES · download_exec（含拆行续行） | 检测规则正则字面量（`\|sh` 与 `-o` 分支拆行避误命中） | 2026-12-18 |
 | AUDIT_RULES · net_in_script / cmd_hint | 检测规则正则字面量 | 2026-12-18 |
 | `_download_url_with_redirects` 入口 | 受控下载入口（逐跳 SSRF 预筛选+钉 IP+超限确认+硬上限+整体 deadline） | 2026-12-18 |

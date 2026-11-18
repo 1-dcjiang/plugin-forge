@@ -508,8 +508,8 @@ def test_node_exec_forms(skill_package):
         assert "node_exec" in {h["rule"] for h in hits}, src
     assert "exec_shell" in {h["rule"] for h in skill_package.audit_text("os.execv('/bin/sh', ['sh'])", "run.py")}
     assert "exec_shell" in {h["rule"] for h in skill_package.audit_text("os.spawnl(os.P_WAIT, '/bin/sh')", "run.py")}
-    assert "js_member_exec" in {h["rule"] for h in skill_package.audit_text("cp.exec(cmd)", "run.js")}
-    assert "js_member_exec" not in {h["rule"] for h in skill_package.audit_text("regex.exec(s)", "run.py")}
+    assert "node_exec" in {h["rule"] for h in skill_package.audit_text("cp.exec(cmd)", "run.js")}
+    assert "node_exec" not in {h["rule"] for h in skill_package.audit_text("regex.exec(s)", "run.js")}
 
 
 def test_pinned_connection_uses_ip_and_hostname(skill_package, monkeypatch):
